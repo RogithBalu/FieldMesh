@@ -1,81 +1,73 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-} from 'react-native';
-import { useRouter } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FieldMeshColors, FieldMeshSpacing, FieldMeshRadius } from '@/constants/fieldMeshTheme';
 import { FieldMeshHeader } from '@/components/fieldmesh/FieldMeshHeader';
 import { InspectionCard } from '@/components/fieldmesh/InspectionCard';
 import { FieldMeshIcon } from '@/components/fieldmesh/FieldMeshIcon';
+import { useAuth } from '@/lib/auth-context';
+import * as db from '@/lib/localdb';
+import { readInspectionSummary, InspectionSummary } from '@/lib/inspectionSummary';
+
+interface Row extends db.Inspection {
+  teamName: string;
+  summary: InspectionSummary;
+}
 
 export default function InspectionsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'all' | 'disputes'>('all');
+  const [rows, setRows] = useState<Row[] | null>(null);
+  const [hasTeams, setHasTeams] = useState(true);
 
-  const inspectionsData = [
-    {
-      id: 'TR-4091',
-      code: '#TR-4091',
-      title: 'Transformer Safety Inspection',
-      location: 'North Grid Substation — Bay 2',
-      completed: 8,
-      total: 12,
-      statusType: 'dispute' as const,
-      statusLabel: '1 dispute',
-      updatedInfo: 'Updated 12m ago · Ravi',
-      tag: 'Phase 2',
-    },
-    {
-      id: 'SW-1104',
-      code: '#SW-1104',
-      title: 'High Voltage Switchgear Check',
-      location: 'West Feeder Bay 4',
-      completed: 12,
-      total: 12,
-      statusType: 'ready' as const,
-      statusLabel: 'Ready to sync',
-      updatedInfo: 'Completed 1h ago · Priya',
-      tag: 'Signed off',
-    },
-    {
-      id: 'GR-8890',
-      code: '#GR-8890',
-      title: 'Perimeter Earthing & Grounding',
-      location: 'Primary Inverter Yard',
-      completed: 0,
-      total: 9,
-      statusType: 'pending' as const,
-      statusLabel: 'Pending',
-      updatedInfo: 'Scheduled today',
-      tag: 'Unassigned',
-    },
-  ];
+  const load = useCallback(async () => {
+    if (!user) return;
+    const [teams, inspections] = await Promise.all([db.listTeamsFor(user.id), db.listInspectionsFor(user.id)]);
+    setHasTeams(teams.length > 0);
+    const teamNameById = new Map(teams.map((t) => [t.id, t.name]));
+    const withSummaries = await Promise.all(
+      inspections.map(async (i) => ({
+        ...i,
+        teamName: teamNameById.get(i.teamId) ?? 'Unknown team',
+        summary: await readInspectionSummary(i.id),
+      }))
+    );
+    setRows(withSummaries);
+  }, [user]);
 
-  const filteredInspections =
-    activeTab === 'disputes'
-      ? inspectionsData.filter((item) => item.statusType === 'dispute')
-      : inspectionsData;
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  const filtered = (rows ?? []).filter((r) => (activeTab === 'disputes' ? r.summary.disputedCount > 0 : true));
+  const disputeCount = (rows ?? []).filter((r) => r.summary.disputedCount > 0).length;
 
   return (
     <View style={styles.container}>
       <FieldMeshHeader
         title="Inspections"
         category="FIELDMESH"
-        statusBadge={{ label: 'On site · 4', variant: 'connected' }}
+        statusBadge={{ label: user?.role ?? '', variant: 'connected' }}
         rightAction={
-          <Pressable
-            onPress={() => router.push('/mesh')}
-            style={({ pressed }) => [styles.meshButton, pressed && styles.meshButtonPressed]}
-          >
-            <FieldMeshIcon name="sensors" size={18} color={FieldMeshColors.primary} />
-            <Text style={styles.meshButtonText}>Mesh</Text>
-          </Pressable>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Pressable
+              onPress={() => router.push('/(fieldmesh)/teams')}
+              style={({ pressed }) => [styles.headerBtn, pressed && styles.headerBtnPressed]}
+            >
+              <FieldMeshIcon name="hub" size={18} color={FieldMeshColors.primary} />
+            </Pressable>
+            <Pressable
+              onPress={logout}
+              style={({ pressed }) => [styles.headerBtn, pressed && styles.headerBtnPressed]}
+            >
+              <FieldMeshIcon name="logout" size={18} color={FieldMeshColors.onSurfaceVariant} />
+            </Pressable>
+          </View>
         }
       />
 
@@ -84,56 +76,40 @@ export default function InspectionsScreen() {
         contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 90 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Device Status Bar */}
         <View style={styles.statusBar}>
           <View style={styles.offlinePill}>
             <View style={styles.offlineDot} />
             <Text style={styles.offlineText}>SAVED ON PHONE</Text>
           </View>
-          <Text style={styles.siteIdText}>Site ID: #NG-884</Text>
+          <Text style={styles.userText}>{user?.name}</Text>
         </View>
 
-        {/* Notice Card */}
-        <View style={styles.noticeCard}>
-          <View style={styles.noticeContent}>
-            <FieldMeshIcon name="info" size={20} color={FieldMeshColors.primaryContainer} />
-            <Text style={styles.noticeText}>A teammate is using a newer app version.</Text>
+        {!hasTeams && rows !== null && (
+          <View style={styles.noticeCard}>
+            <View style={styles.noticeContent}>
+              <FieldMeshIcon name="info" size={20} color={FieldMeshColors.primaryContainer} />
+              <Text style={styles.noticeText}>Create a team before starting your first inspection.</Text>
+            </View>
+            <Pressable
+              onPress={() => router.push('/(fieldmesh)/teams')}
+              style={({ pressed }) => [styles.learnMoreBtn, pressed && styles.buttonPressed]}
+            >
+              <Text style={styles.learnMoreText}>Create team</Text>
+            </Pressable>
           </View>
-          <Pressable
-            onPress={() => router.push('/onboarding')}
-            style={({ pressed }) => [styles.learnMoreBtn, pressed && styles.buttonPressed]}
-          >
-            <Text style={styles.learnMoreText}>Learn more</Text>
-          </Pressable>
-        </View>
+        )}
 
-        {/* Filter Tabs */}
         <View style={styles.tabBar}>
           <Pressable
             onPress={() => setActiveTab('all')}
             style={[styles.tab, activeTab === 'all' ? styles.tabActive : styles.tabInactive]}
           >
-            <Text
-              style={[
-                styles.tabText,
-                activeTab === 'all' ? styles.tabTextActive : styles.tabTextInactive,
-              ]}
-            >
+            <Text style={[styles.tabText, activeTab === 'all' ? styles.tabTextActive : styles.tabTextInactive]}>
               All inspections
             </Text>
-            <View
-              style={[
-                styles.countBadge,
-                activeTab === 'all' ? styles.countBadgeActive : styles.countBadgeInactive,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.countText,
-                  activeTab === 'all' ? styles.countTextActive : styles.countTextInactive,
-                ]}
-              >
-                3
+            <View style={[styles.countBadge, activeTab === 'all' ? styles.countBadgeActive : styles.countBadgeInactive]}>
+              <Text style={[styles.countText, activeTab === 'all' ? styles.countTextActive : styles.countTextInactive]}>
+                {rows?.length ?? 0}
               </Text>
             </View>
           </Pressable>
@@ -142,44 +118,57 @@ export default function InspectionsScreen() {
             onPress={() => setActiveTab('disputes')}
             style={[styles.tab, activeTab === 'disputes' ? styles.tabActiveDispute : styles.tabInactive]}
           >
-            <Text
-              style={[
-                styles.tabText,
-                activeTab === 'disputes' ? styles.tabTextDispute : styles.tabTextInactive,
-              ]}
-            >
+            <Text style={[styles.tabText, activeTab === 'disputes' ? styles.tabTextDispute : styles.tabTextInactive]}>
               Open disputes
             </Text>
             <View style={styles.disputeCountBadge}>
-              <Text style={styles.disputeCountText}>1</Text>
+              <Text style={styles.disputeCountText}>{disputeCount}</Text>
             </View>
           </Pressable>
         </View>
 
-        {/* Inspections List */}
-        <View style={styles.list}>
-          {filteredInspections.map((item) => (
-            <InspectionCard
-              key={item.id}
-              code={item.code}
-              title={item.title}
-              location={item.location}
-              completed={item.completed}
-              total={item.total}
-              statusType={item.statusType}
-              statusLabel={item.statusLabel}
-              updatedInfo={item.updatedInfo}
-              tag={item.tag}
-              onPress={() => router.push(`/inspections/${item.id}`)}
-            />
-          ))}
-        </View>
+        {rows === null ? (
+          <ActivityIndicator style={{ marginTop: 24 }} color={FieldMeshColors.primary} />
+        ) : filtered.length === 0 ? (
+          <View style={styles.emptyState}>
+            <FieldMeshIcon name="rule" size={32} color={FieldMeshColors.outline} />
+            <Text style={styles.emptyTitle}>
+              {activeTab === 'disputes' ? 'No open disputes' : 'No inspections yet'}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.list}>
+            {filtered.map((item) => {
+              const statusType = item.summary.disputedCount > 0 ? 'dispute' : item.summary.completed >= item.summary.total ? 'ready' : 'pending';
+              const statusLabel =
+                statusType === 'dispute'
+                  ? `${item.summary.disputedCount} dispute${item.summary.disputedCount === 1 ? '' : 's'}`
+                  : statusType === 'ready'
+                  ? 'Ready to sync'
+                  : 'In progress';
+              return (
+                <InspectionCard
+                  key={item.id}
+                  code={`#${item.id.slice(-6).toUpperCase()}`}
+                  title={item.title}
+                  location={[item.teamName, item.site].filter(Boolean).join(' · ')}
+                  completed={item.summary.completed}
+                  total={item.summary.total}
+                  statusType={statusType}
+                  statusLabel={statusLabel}
+                  updatedInfo={new Date(item.createdAt).toLocaleDateString()}
+                  tag={item.teamName}
+                  onPress={() => router.push(`/(fieldmesh)/inspections/${item.id}`)}
+                />
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
 
-      {/* Sticky Bottom Action Dock */}
       <View style={[styles.bottomDock, { paddingBottom: Math.max(insets.bottom, 16) }]}>
         <Pressable
-          onPress={() => router.push('/inspections/TR-4091')}
+          onPress={() => router.push('/(fieldmesh)/inspections/new')}
           style={({ pressed }) => [styles.newInspectionBtn, pressed && styles.buttonPressed]}
         >
           <FieldMeshIcon name="add" size={22} color={FieldMeshColors.onPrimary} />
@@ -191,205 +180,59 @@ export default function InspectionsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: FieldMeshColors.surface,
-  },
-  scroll: {
-    flex: 1,
-  },
-  content: {
-    padding: FieldMeshSpacing.gutter,
-    gap: FieldMeshSpacing.md,
-  },
-  statusBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 2,
-  },
+  container: { flex: 1, backgroundColor: FieldMeshColors.surface },
+  scroll: { flex: 1 },
+  content: { padding: FieldMeshSpacing.gutter, gap: FieldMeshSpacing.md },
+  statusBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 2 },
   offlinePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: FieldMeshColors.surfaceContainerHigh,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: FieldMeshRadius.full,
+    flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: FieldMeshColors.surfaceContainerHigh,
+    paddingHorizontal: 12, paddingVertical: 5, borderRadius: FieldMeshRadius.full,
   },
-  offlineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: FieldMeshColors.outline,
-  },
-  offlineText: {
-    fontFamily: 'monospace',
-    fontSize: 11,
-    fontWeight: '700',
-    color: FieldMeshColors.onSurfaceVariant,
-    letterSpacing: 0.5,
-  },
-  siteIdText: {
-    fontFamily: 'monospace',
-    fontSize: 12,
-    fontWeight: '600',
-    color: FieldMeshColors.onSurfaceVariant,
-  },
+  offlineDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: FieldMeshColors.outline },
+  offlineText: { fontFamily: 'monospace', fontSize: 11, fontWeight: '700', color: FieldMeshColors.onSurfaceVariant, letterSpacing: 0.5 },
+  userText: { fontFamily: 'monospace', fontSize: 12, fontWeight: '600', color: FieldMeshColors.onSurfaceVariant },
   noticeCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: FieldMeshColors.surfaceContainerLow,
-    padding: 12,
-    borderRadius: FieldMeshRadius.lg,
-    gap: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: FieldMeshColors.surfaceContainerLow,
+    padding: 12, borderRadius: FieldMeshRadius.lg, gap: 12,
   },
-  noticeContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-  },
-  noticeText: {
-    fontSize: 13,
-    color: FieldMeshColors.onSurface,
-    fontWeight: '500',
-    flex: 1,
-  },
-  learnMoreBtn: {
-    backgroundColor: FieldMeshColors.surfaceContainerHighest,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: FieldMeshRadius.md,
-  },
-  learnMoreText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: FieldMeshColors.onSurface,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 2,
-  },
-  tab: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: FieldMeshRadius.full,
-    gap: 6,
-  },
-  tabActive: {
-    backgroundColor: FieldMeshColors.primary,
-  },
-  tabActiveDispute: {
-    backgroundColor: FieldMeshColors.tertiaryFixed,
-  },
-  tabInactive: {
-    backgroundColor: FieldMeshColors.surfaceContainer,
-  },
-  tabText: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  tabTextActive: {
-    color: FieldMeshColors.onPrimary,
-  },
-  tabTextDispute: {
-    color: FieldMeshColors.onTertiaryFixed,
-  },
-  tabTextInactive: {
-    color: FieldMeshColors.onSurfaceVariant,
-  },
-  countBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: FieldMeshRadius.full,
-  },
-  countBadgeActive: {
-    backgroundColor: FieldMeshColors.primaryContainer,
-  },
-  countBadgeInactive: {
-    backgroundColor: FieldMeshColors.surfaceContainerHigh,
-  },
-  countText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  countTextActive: {
-    color: FieldMeshColors.onPrimaryContainer,
-  },
-  countTextInactive: {
-    color: FieldMeshColors.onSurfaceVariant,
-  },
-  disputeCountBadge: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: FieldMeshColors.tertiaryFixedDim,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  disputeCountText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: FieldMeshColors.onTertiaryFixed,
-  },
-  list: {
-    gap: FieldMeshSpacing.md,
-  },
+  noticeContent: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  noticeText: { fontSize: 13, color: FieldMeshColors.onSurface, fontWeight: '500', flex: 1 },
+  learnMoreBtn: { backgroundColor: FieldMeshColors.surfaceContainerHighest, paddingHorizontal: 10, paddingVertical: 6, borderRadius: FieldMeshRadius.md },
+  learnMoreText: { fontSize: 12, fontWeight: '700', color: FieldMeshColors.onSurface },
+  tabBar: { flexDirection: 'row', gap: 8, paddingVertical: 2 },
+  tab: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 9, borderRadius: FieldMeshRadius.full, gap: 6 },
+  tabActive: { backgroundColor: FieldMeshColors.primary },
+  tabActiveDispute: { backgroundColor: FieldMeshColors.tertiaryFixed },
+  tabInactive: { backgroundColor: FieldMeshColors.surfaceContainer },
+  tabText: { fontSize: 13, fontWeight: '600' },
+  tabTextActive: { color: FieldMeshColors.onPrimary },
+  tabTextDispute: { color: FieldMeshColors.onTertiaryFixed },
+  tabTextInactive: { color: FieldMeshColors.onSurfaceVariant },
+  countBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: FieldMeshRadius.full },
+  countBadgeActive: { backgroundColor: FieldMeshColors.primaryContainer },
+  countBadgeInactive: { backgroundColor: FieldMeshColors.surfaceContainerHigh },
+  countText: { fontSize: 11, fontWeight: '700' },
+  countTextActive: { color: FieldMeshColors.onPrimaryContainer },
+  countTextInactive: { color: FieldMeshColors.onSurfaceVariant },
+  disputeCountBadge: { width: 20, height: 20, borderRadius: 10, backgroundColor: FieldMeshColors.tertiaryFixedDim, alignItems: 'center', justifyContent: 'center' },
+  disputeCountText: { fontSize: 11, fontWeight: '700', color: FieldMeshColors.onTertiaryFixed },
+  emptyState: { alignItems: 'center', gap: 8, paddingVertical: 40 },
+  emptyTitle: { fontSize: 14, fontWeight: '700', color: FieldMeshColors.onSurfaceVariant },
+  list: { gap: FieldMeshSpacing.md },
   bottomDock: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: FieldMeshColors.surface,
-    paddingHorizontal: FieldMeshSpacing.gutter,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: FieldMeshColors.surfaceContainerHigh,
+    position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: FieldMeshColors.surface,
+    paddingHorizontal: FieldMeshSpacing.gutter, paddingTop: 10, borderTopWidth: 1, borderTopColor: FieldMeshColors.surfaceContainerHigh,
   },
   newInspectionBtn: {
-    height: 52,
-    backgroundColor: FieldMeshColors.primaryContainer,
-    borderRadius: FieldMeshRadius.lg,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    shadowColor: FieldMeshColors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 4,
+    height: 52, backgroundColor: FieldMeshColors.primaryContainer, borderRadius: FieldMeshRadius.lg, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center', gap: 8,
+    shadowColor: FieldMeshColors.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 4,
   },
-  newInspectionText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: FieldMeshColors.onPrimary,
-    letterSpacing: 0.3,
+  newInspectionText: { fontSize: 15, fontWeight: '700', color: FieldMeshColors.onPrimary, letterSpacing: 0.3 },
+  headerBtn: {
+    width: 34, height: 34, borderRadius: FieldMeshRadius.md, backgroundColor: FieldMeshColors.surfaceContainerHigh,
+    alignItems: 'center', justifyContent: 'center',
   },
-  meshButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: FieldMeshColors.surfaceContainerHigh,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: FieldMeshRadius.md,
-  },
-  meshButtonPressed: {
-    opacity: 0.7,
-  },
-  meshButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: FieldMeshColors.primary,
-  },
-  buttonPressed: {
-    opacity: 0.85,
-    transform: [{ scale: 0.98 }],
-  },
+  headerBtnPressed: { opacity: 0.7 },
+  buttonPressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
 });
