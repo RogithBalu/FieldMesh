@@ -13,6 +13,7 @@
  *  - Nearby mesh links (src/lib/mesh) — one YjsSync per peer
  *  - AsyncStorage snapshot (offline opens)
  */
+import '@/lib/cryptoShim'; // must precede yjs: see cryptoShim.ts
 import * as Y from 'yjs';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';

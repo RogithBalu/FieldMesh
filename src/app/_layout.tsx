@@ -1,6 +1,7 @@
 // Must be the first import: Yjs (client ids) and EditLog (edit ids) need
 // crypto.getRandomValues before any of them are loaded.
 import 'react-native-get-random-values';
+import '@/lib/cryptoShim';
 
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
