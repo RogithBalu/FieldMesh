@@ -8,7 +8,7 @@ import { FieldMeshIcon } from '@/components/fieldmesh/FieldMeshIcon';
 import { PhotoThumb } from '@/components/fieldmesh/PhotoThumb';
 import { templateDefs } from '@/constants/checklistTemplate';
 import { useAuth } from '@/lib/auth-context';
-import { api, errorMessage, type EditRow, type Inspection } from '@/lib/api';
+import { api, canReview, errorMessage, type EditRow, type Inspection } from '@/lib/api';
 import { useInspectionDoc, defsFrom } from '@/lib/useInspectionDoc';
 import { buildChecklist, fieldTitle, formatTime, RESOLUTION_NOTES_FIELD } from '@/lib/checklist';
 import { decodeHlc } from '@/lib/editlog/hlc';
@@ -50,6 +50,10 @@ export default function DisputeScreen() {
   const defs = useMemo(() => defsFrom(inspection?.fields, templateDefs()), [inspection]);
   const field = useMemo(() => buildChecklist(defs).find((f) => f.fieldId === fieldId), [defs, fieldId]);
   const author = useMemo(() => (user ? { id: user.id, name: user.name, role: user.role } : null), [user]);
+  /** The server enforces this too; here it only keeps the buttons honest. */
+  const mayReview = canReview(user?.role);
+  const isFinalized = !!inspection?.finalized_at;
+  const canAct = mayReview && !isFinalized && !resolving;
   const doc = useInspectionDoc(id, deviceId, author, defs);
 
   useEffect(() => {
@@ -273,12 +277,29 @@ export default function DisputeScreen() {
         <View style={styles.decisionSection}>
           <View style={styles.decisionHeader}>
             <Text style={styles.decisionLabel}>Human-in-the-loop verdict</Text>
-            <Text style={styles.authRequired}>{user.role === 'technician' ? 'Signed as technician' : `${user.role} sign-off`}</Text>
+            <Text style={styles.authRequired}>{mayReview ? `${user.role} sign-off` : 'Review required'}</Text>
           </View>
+
+          {isFinalized ? (
+            <View style={styles.gateNotice} testID="gate-finalized">
+              <FieldMeshIcon name="lock" size={16} color={FieldMeshColors.outline} />
+              <Text style={styles.gateNoticeText}>
+                This inspection is finalized. An auditor must re-open it before any verdict can change.
+              </Text>
+            </View>
+          ) : !mayReview ? (
+            <View style={styles.gateNotice} testID="gate-role">
+              <FieldMeshIcon name="lock" size={16} color={FieldMeshColors.outline} />
+              <Text style={styles.gateNoticeText}>
+                Settling a dispute can turn a safety FAIL into a PASS, so it is a supervisor or auditor
+                decision. Your entries are recorded either way — ask a lead to sign this one off.
+              </Text>
+            </View>
+          ) : null}
 
           {isPassFail ? (
             <>
-              <Pressable onPress={handleConfirmFail} disabled={resolving} style={({ pressed }) => [styles.confirmFailBtn, pressed && styles.btnPressed]} testID="confirm-fail">
+              <Pressable onPress={handleConfirmFail} disabled={!canAct} style={({ pressed }) => [styles.confirmFailBtn, pressed && styles.btnPressed, !canAct && styles.btnDisabled]} testID="confirm-fail">
                 {resolving ? <ActivityIndicator color="#fff" /> : <FieldMeshIcon name="verified" size={22} color={FieldMeshColors.onError} />}
                 <Text style={styles.confirmFailBtnText}>Confirm FAIL as final result</Text>
               </Pressable>
@@ -301,7 +322,7 @@ export default function DisputeScreen() {
                     onChangeText={setOverrideNotes}
                     testID="override-notes"
                   />
-                  <Pressable onPress={handleConfirmPass} disabled={resolving} style={({ pressed }) => [styles.submitOverrideBtn, pressed && styles.btnPressed]} testID="confirm-pass">
+                  <Pressable onPress={handleConfirmPass} disabled={!canAct} style={({ pressed }) => [styles.submitOverrideBtn, pressed && styles.btnPressed, !canAct && styles.btnDisabled]} testID="confirm-pass">
                     <FieldMeshIcon name="check_circle" size={20} color={FieldMeshColors.onSecondary} />
                     <Text style={styles.submitOverrideText}>Sign & confirm PASS override</Text>
                   </Pressable>
@@ -328,7 +349,7 @@ export default function DisputeScreen() {
                 value={overrideNotes}
                 onChangeText={setOverrideNotes}
               />
-              <Pressable onPress={handleGenericResolve} disabled={resolving} style={({ pressed }) => [styles.confirmGenericBtn, pressed && styles.btnPressed]} testID="confirm-resolution">
+              <Pressable onPress={handleGenericResolve} disabled={!canAct} style={({ pressed }) => [styles.confirmGenericBtn, pressed && styles.btnPressed, !canAct && styles.btnDisabled]} testID="confirm-resolution">
                 {resolving ? <ActivityIndicator color="#fff" /> : <FieldMeshIcon name="check_circle" size={20} color={FieldMeshColors.onPrimary} />}
                 <Text style={styles.confirmGenericText}>{serverDisputed ? 'Sign & resolve on server' : 'Record resolution'}</Text>
               </Pressable>
@@ -413,4 +434,20 @@ const styles = StyleSheet.create({
   confirmGenericText: { fontSize: 14, fontWeight: '700', color: FieldMeshColors.onPrimary },
   footnote: { fontFamily: 'monospace', fontSize: 10, color: FieldMeshColors.outline, lineHeight: 14 },
   btnPressed: { opacity: 0.88, transform: [{ scale: 0.985 }] },
+  btnDisabled: { opacity: 0.4 },
+  gateNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: FieldMeshSpacing.sm,
+    backgroundColor: FieldMeshColors.surfaceContainerLow,
+    borderRadius: FieldMeshRadius.md,
+    padding: FieldMeshSpacing.md,
+    marginBottom: FieldMeshSpacing.md,
+  },
+  gateNoticeText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: FieldMeshColors.onSurfaceVariant,
+  },
 });

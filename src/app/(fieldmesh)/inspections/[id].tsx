@@ -10,7 +10,7 @@ import { TriStateVerdict } from '@/components/fieldmesh/TriStateVerdict';
 import { PhotoThumb } from '@/components/fieldmesh/PhotoThumb';
 import { templateDefs, type ChecklistField } from '@/constants/checklistTemplate';
 import { useAuth } from '@/lib/auth-context';
-import { api, errorMessage, NetworkError, type Inspection } from '@/lib/api';
+import { api, canReopen, canReview, errorMessage, NetworkError, type Inspection } from '@/lib/api';
 import { useInspectionDoc, defsFrom, type SyncStatus } from '@/lib/useInspectionDoc';
 import { buildChecklist, relativeTime } from '@/lib/checklist';
 import { ensureUploaded, isPhotoHash, pickPhoto, retryPendingUploads, savePhotoMeta, type PhotoSource } from '@/lib/photos';
@@ -62,6 +62,67 @@ export default function InspectionDetailScreen() {
   const hotspotOn = meshForThis && (mesh.hotspot.role === 'hosting' || mesh.hotspot.role === 'joined' || mesh.hotspot.role === 'joining' || mesh.hotspot.role === 'starting');
   const meshOn = meshForThis && (mesh.status === 'searching' || mesh.status === 'linked' || mesh.status === 'starting' || hotspotOn);
   const [meshStarting, setMeshStarting] = useState(false);
+
+  // Sign-off state. `readOnly` gates every control below: a finalized
+  // checklist still renders and still syncs, it just stops accepting edits.
+  const [signingOff, setSigningOff] = useState(false);
+  const isFinalized = !!inspection?.finalized_at;
+  const mayReview = canReview(user?.role);
+  const mayReopen = canReopen(user?.role);
+  const readOnly = isFinalized;
+
+  const handleFinalize = async (force = false) => {
+    if (!id) return;
+    setSigningOff(true);
+    try {
+      const res = await api.finalize(id, { force });
+      setInspection((prev) =>
+        prev ? { ...prev, finalized_at: res.finalizedAt, finalized_by: res.finalizedBy } : prev
+      );
+      Alert.alert(
+        'Inspection finalized',
+        res.forcedOverDisputes
+          ? 'Signed off with disputes still open. They remain on the record.'
+          : 'The checklist is now read-only. Only an auditor can re-open it.'
+      );
+    } catch (e) {
+      // 409 with disputedFields means unresolved conflicts block a clean sign-off.
+      const body = (e as { body?: { disputedFields?: string[] } }).body;
+      if (body?.disputedFields?.length) {
+        Alert.alert(
+          'Disputes still open',
+          `${body.disputedFields.length} field(s) are still disputed. Settle them first, or sign off anyway and leave them on the record.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Sign off anyway', style: 'destructive', onPress: () => handleFinalize(true) },
+          ]
+        );
+      } else {
+        Alert.alert('Could not finalize', errorMessage(e));
+      }
+    } finally {
+      setSigningOff(false);
+    }
+  };
+
+  const handleReopen = async () => {
+    if (!id) return;
+    setSigningOff(true);
+    try {
+      const res = await api.reopen(id);
+      setInspection((prev) => (prev ? { ...prev, finalized_at: null, finalized_by: null } : prev));
+      Alert.alert(
+        'Inspection re-opened',
+        res.lateEdits > 0
+          ? `${res.lateEdits} edit(s) arrived while it was closed. They stay excluded from the merged values until reviewed.`
+          : 'The checklist accepts edits again.'
+      );
+    } catch (e) {
+      Alert.alert('Could not re-open', errorMessage(e));
+    } finally {
+      setSigningOff(false);
+    }
+  };
 
   const handleStartMesh = async () => {
     if (!id || !user || !deviceId) return;
@@ -221,6 +282,48 @@ export default function InspectionDetailScreen() {
             <Text style={styles.infoBannerText}>{loadError}</Text>
           </View>
         )}
+
+        {isFinalized && (
+          <View style={styles.finalBanner} testID="finalized-banner">
+            <FieldMeshIcon name="lock" size={18} color={FieldMeshColors.primary} />
+            <View style={styles.finalBannerBody}>
+              <Text style={styles.finalBannerTitle}>Finalized — read only</Text>
+              <Text style={styles.finalBannerText}>
+                Signed off by {nameFor(inspection?.finalized_by ?? '')}
+                {inspection?.finalized_at ? ` · ${relativeTime(inspection.finalized_at)}` : ''}.
+                {mayReopen
+                  ? ' As an auditor you can re-open it.'
+                  : ' Only an auditor can re-open it.'}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {(mayReview || mayReopen) && (
+          <Pressable
+            onPress={isFinalized ? handleReopen : () => handleFinalize(false)}
+            disabled={signingOff || (isFinalized && !mayReopen)}
+            style={({ pressed }) => [
+              isFinalized ? styles.reopenBtn : styles.finalizeBtn,
+              pressed && styles.pressed,
+              (signingOff || (isFinalized && !mayReopen)) && styles.controlDisabled,
+            ]}
+            testID={isFinalized ? 'reopen-inspection' : 'finalize-inspection'}
+          >
+            {signingOff ? (
+              <ActivityIndicator color={isFinalized ? FieldMeshColors.primary : '#fff'} />
+            ) : (
+              <FieldMeshIcon
+                name={isFinalized ? 'lock_outline' : 'verified'}
+                size={18}
+                color={isFinalized ? FieldMeshColors.primary : '#fff'}
+              />
+            )}
+            <Text style={isFinalized ? styles.reopenBtnText : styles.finalizeBtnText}>
+              {isFinalized ? 'Re-open inspection' : 'Finalize inspection'}
+            </Text>
+          </Pressable>
+        )}
         {doc.status !== 'connected' && !meshOn && isMeshAvailable() && (
           <View style={styles.meshBanner}>
             <FieldMeshIcon name="sensors" size={18} color={FieldMeshColors.primary} />
@@ -327,6 +430,7 @@ export default function InspectionDetailScreen() {
                     <TriStateVerdict
                       verdict={value === 'pass' || value === 'fail' ? value : null}
                       onVerdictChange={(v) => {
+                        if (readOnly) return;
                         if (v !== value) doc.setField(field.fieldId, v);
                       }}
                       disputeInfo={disputeText ? { text: disputeText, onResolvePress: () => goResolve(field.fieldId) } : undefined}
@@ -376,6 +480,7 @@ export default function InspectionDetailScreen() {
                             placeholderTextColor={FieldMeshColors.outline}
                             onChangeText={(t) => setNumericDraft((d) => ({ ...d, [field.fieldId]: t }))}
                             onEndEditing={(e) => commitNumeric(field, e.nativeEvent.text)}
+                            editable={!readOnly}
                             testID={`num-${field.fieldId}`}
                           />
                           {field.unit && <Text style={styles.stepperUnit}>{field.unit}</Text>}
@@ -413,6 +518,7 @@ export default function InspectionDetailScreen() {
                         value={notesDraft[field.fieldId] ?? (typeof value === 'string' ? value : '')}
                         onChangeText={(t) => scheduleNotes(field, t)}
                         onEndEditing={(e) => commitNotes(field, e.nativeEvent.text)}
+                        editable={!readOnly}
                         testID={`notes-${field.fieldId}`}
                       />
                       {disputeText && <DisputeRow text={disputeText} onPress={() => goResolve(field.fieldId)} />}
@@ -422,11 +528,11 @@ export default function InspectionDetailScreen() {
                   {field.type === 'photo' && (
                     <>
                       <View style={styles.photoBtnRow}>
-                        <Pressable onPress={() => handlePhoto(field, 'camera')} style={({ pressed }) => [styles.photoButton, pressed && styles.pressed]} testID={`camera-${field.fieldId}`}>
+                        <Pressable onPress={() => handlePhoto(field, 'camera')} disabled={readOnly} style={({ pressed }) => [styles.photoButton, pressed && styles.pressed, readOnly && styles.controlDisabled]} testID={`camera-${field.fieldId}`}>
                           <FieldMeshIcon name="add_a_photo" size={22} color={FieldMeshColors.onSurface} />
                           <Text style={styles.photoButtonText}>{value ? 'Retake' : 'Take photo'}</Text>
                         </Pressable>
-                        <Pressable onPress={() => handlePhoto(field, 'library')} style={({ pressed }) => [styles.photoButtonAlt, pressed && styles.pressed]} testID={`gallery-${field.fieldId}`}>
+                        <Pressable onPress={() => handlePhoto(field, 'library')} disabled={readOnly} style={({ pressed }) => [styles.photoButtonAlt, pressed && styles.pressed, readOnly && styles.controlDisabled]} testID={`gallery-${field.fieldId}`}>
                           <FieldMeshIcon name="photo_library" size={20} color={FieldMeshColors.primary} />
                           <Text style={styles.photoButtonAltText}>Gallery</Text>
                         </Pressable>
@@ -517,6 +623,45 @@ const styles = StyleSheet.create({
   content: { padding: FieldMeshSpacing.gutter, gap: FieldMeshSpacing.md },
   headerBtn: { width: 34, height: 34, borderRadius: FieldMeshRadius.md, backgroundColor: FieldMeshColors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center' },
   infoBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.surfaceContainerHigh, padding: 10, borderRadius: FieldMeshRadius.md },
+  controlDisabled: { opacity: 0.45 },
+  finalBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: FieldMeshColors.surfaceContainerLow,
+    borderLeftWidth: 3,
+    borderLeftColor: FieldMeshColors.primary,
+    padding: 12,
+    borderRadius: FieldMeshRadius.md,
+    marginTop: 8,
+  },
+  finalBannerBody: { flex: 1, gap: 2 },
+  finalBannerTitle: { fontSize: 14, fontWeight: '700', color: FieldMeshColors.onSurface },
+  finalBannerText: { fontSize: 12, lineHeight: 17, color: FieldMeshColors.onSurfaceVariant },
+  finalizeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: FieldMeshColors.primary,
+    paddingVertical: 14,
+    borderRadius: FieldMeshRadius.md,
+    marginTop: 12,
+  },
+  finalizeBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  reopenBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: FieldMeshColors.primary,
+    paddingVertical: 14,
+    borderRadius: FieldMeshRadius.md,
+    marginTop: 12,
+  },
+  reopenBtnText: { color: FieldMeshColors.primary, fontSize: 15, fontWeight: '700' },
   infoBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onSurfaceVariant },
   meshBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.primaryFixed, padding: 10, borderRadius: FieldMeshRadius.md },
   meshBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onPrimaryFixed },

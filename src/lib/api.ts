@@ -7,6 +7,7 @@
  *   GET  /inspections   POST /inspections  GET  /inspections/:id
  *   GET  /inspections/:id/history          GET  /inspections/:id/disputes
  *   POST /inspections/:id/resolve          GET  /inspections/:id/report
+ *   POST /inspections/:id/finalize         POST /inspections/:id/reopen
  *   HEAD /photos/:hash  GET  /photos/:hash
  *   POST /uploads, PATCH/HEAD /uploads/:id   (tus resumable upload)
  *
@@ -65,6 +66,39 @@ export interface Inspection {
   schema_version: number;
   /** Present on GET /inspections/:id (servers with field-definition support). */
   fields?: FieldDefRow[];
+  /** Epoch ms of sign-off, or null/absent while the inspection is open. */
+  finalized_at?: number | null;
+  /** User id of the reviewer who signed it off. */
+  finalized_by?: string | null;
+}
+
+export interface FinalizeResult {
+  finalizedAt: number;
+  finalizedBy: string;
+  /** True when the reviewer signed off over unsettled disputes. */
+  forcedOverDisputes: boolean;
+}
+
+export interface ReopenResult {
+  reopenedBy: string;
+  wasFinalizedAt: number;
+  wasFinalizedBy: string | null;
+  /** Edits that arrived while the inspection was closed, still excluded. */
+  lateEdits: number;
+}
+
+/**
+ * Who may settle a dispute or sign an inspection off. Mirrors REVIEWER_ROLES
+ * on the server, which enforces it for real — this only shapes the UI, since a
+ * phone's own claim about its role cannot be trusted.
+ */
+export function canReview(role: Role | undefined): boolean {
+  return role === 'supervisor' || role === 'auditor';
+}
+
+/** Only an auditor may re-open, so a supervisor cannot undo their own sign-off. */
+export function canReopen(role: Role | undefined): boolean {
+  return role === 'auditor';
 }
 
 export interface EditRow {
@@ -291,6 +325,21 @@ export const api = {
     input: { fieldId: string; value: unknown; device: string; schemaVersion?: number }
   ): Promise<{ editId: string }> {
     const res = await request('POST', `/inspections/${encodeURIComponent(id)}/resolve`, { json: input });
+    return expectOk(res, 200);
+  },
+  /**
+   * Sign the inspection off. The server refuses while any field is still
+   * disputed unless `force` is set, and refuses outright for a technician.
+   */
+  async finalize(id: string, input?: { force?: boolean }): Promise<FinalizeResult> {
+    const res = await request('POST', `/inspections/${encodeURIComponent(id)}/finalize`, {
+      json: input ?? {},
+    });
+    return expectOk(res, 200);
+  },
+  /** Auditor-only: reverse a sign-off so the checklist accepts edits again. */
+  async reopen(id: string): Promise<ReopenResult> {
+    const res = await request('POST', `/inspections/${encodeURIComponent(id)}/reopen`, { json: {} });
     return expectOk(res, 200);
   },
   async report(id: string): Promise<Report> {
