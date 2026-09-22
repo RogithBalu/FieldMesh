@@ -1,13 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { nanoid } from "nanoid";
+import { isNonEmptyString, jsonBody } from "../utils/body.js";
 
 export async function teamRoutes(app: FastifyInstance) {
   const authenticate = (app as any).authenticate;
 
   // Creates a team and adds the caller as its first member.
-  app.post("/teams", { onRequest: [authenticate] }, async (req) => {
-    const { name } = req.body as { name: string };
+  app.post("/teams", { onRequest: [authenticate] }, async (req, reply) => {
+    const { name } = jsonBody<{ name: string }>(req);
+    if (!isNonEmptyString(name)) {
+      return reply.code(400).send({ error: "name required" });
+    }
     const sub = (req.user as any).sub;
 
     const id = nanoid();
@@ -39,7 +43,10 @@ export async function teamRoutes(app: FastifyInstance) {
     { onRequest: [authenticate] },
     async (req, reply) => {
       const { id } = req.params as { id: string };
-      const { userId } = req.body as { userId: string };
+      const { userId } = jsonBody<{ userId: string }>(req);
+      if (!isNonEmptyString(userId)) {
+        return reply.code(400).send({ error: "userId required" });
+      }
       const sub = (req.user as any).sub;
 
       const isMember = db

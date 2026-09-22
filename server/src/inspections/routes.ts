@@ -3,23 +3,8 @@ import { db } from "../db/index.js";
 import { nanoid } from "nanoid";
 import { tick, encodeHlc, decodeHlc, compare, type EditEntry } from "@fieldmesh/shared";
 import { getHocuspocus } from "../sync/hocuspocus.js";
-
-const isTeamMemberStmt = db.prepare(
-  "SELECT 1 FROM team_members WHERE team_id = ? AND user_id = ?"
-);
-
-const inspectionTeamStmt = db.prepare(
-  "SELECT team_id FROM inspections WHERE id = ?"
-);
-
-/** True if `userId` belongs to the team that owns `inspectionId`. */
-function isMemberOfInspection(inspectionId: string, userId: string): boolean {
-  const row = inspectionTeamStmt.get(inspectionId) as
-    | { team_id: string }
-    | undefined;
-  if (!row) return false;
-  return !!isTeamMemberStmt.get(row.team_id, userId);
-}
+import { denyIfNoAccess, inspectionAccess, isTeamMember } from "./access.js";
+import { isNonEmptyString, jsonBody } from "../utils/body.js";
 
 export async function inspectionRoutes(app: FastifyInstance) {
   const authenticate = (app as any).authenticate;
@@ -43,10 +28,22 @@ export async function inspectionRoutes(app: FastifyInstance) {
     "/inspections",
     { onRequest: [authenticate] },
     async (req, reply) => {
-      const { teamId, title, site, schemaVersion } = req.body as any;
+      const { teamId, title, site, schemaVersion } = jsonBody<{
+        teamId: string;
+        title: string;
+        site?: string;
+        schemaVersion?: number;
+      }>(req);
       const sub = (req.user as any).sub;
 
-      if (!isTeamMemberStmt.get(teamId, sub)) {
+      if (!isNonEmptyString(teamId)) {
+        return reply.code(400).send({ error: "teamId required" });
+      }
+      if (!isNonEmptyString(title)) {
+        return reply.code(400).send({ error: "title required" });
+      }
+
+      if (!isTeamMember(teamId, sub)) {
         return reply.code(403).send({ error: "not a member of this team" });
       }
 
@@ -64,9 +61,7 @@ export async function inspectionRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const sub = (req.user as any).sub;
-      if (!isMemberOfInspection(id, sub)) {
-        return reply.code(403).send({ error: "not a member of this inspection's team" });
-      }
+      if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
       return db.prepare("SELECT * FROM inspections WHERE id = ?").get(id);
     }
   );
@@ -77,9 +72,7 @@ export async function inspectionRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const sub = (req.user as any).sub;
-      if (!isMemberOfInspection(id, sub)) {
-        return reply.code(403).send({ error: "not a member of this inspection's team" });
-      }
+      if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
       return db
         .prepare("SELECT * FROM edits WHERE inspection_id = ? ORDER BY hlc")
         .all(id);
@@ -92,9 +85,7 @@ export async function inspectionRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const sub = (req.user as any).sub;
-      if (!isMemberOfInspection(id, sub)) {
-        return reply.code(403).send({ error: "not a member of this inspection's team" });
-      }
+      if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
       return db
         .prepare(
           "SELECT * FROM edits WHERE inspection_id = ? AND disputed = 1"
@@ -112,17 +103,15 @@ export async function inspectionRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const sub = (req.user as any).sub;
-      if (!isMemberOfInspection(id, sub)) {
-        return reply.code(403).send({ error: "not a member of this inspection's team" });
-      }
+      if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
 
-      const { fieldId, value, device, schemaVersion } = req.body as {
-        fieldId?: string;
-        value?: unknown;
-        device?: string;
-        schemaVersion?: number;
-      };
-      if (!fieldId) {
+      const { fieldId, value, device, schemaVersion } = jsonBody<{
+        fieldId: string;
+        value: unknown;
+        device: string;
+        schemaVersion: number;
+      }>(req);
+      if (!isNonEmptyString(fieldId)) {
         return reply.code(400).send({ error: "fieldId required" });
       }
 
