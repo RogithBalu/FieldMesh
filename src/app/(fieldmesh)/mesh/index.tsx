@@ -48,16 +48,21 @@ export default function MeshNetworkScreen() {
   const [pickedId, setPickedId] = useState<string | null>(null);
   const sessionId = id || pickedId || undefined;
 
-  // Opened from the list header (no inspection): offer the cached inspections to host/join for.
+  // Opened from the list header (no inspection): offer the cached inspections to
+  // host/join for, and default to the most recent so the mesh + hotspot cards
+  // are usable straight away (the picker below still lets you switch).
   useEffect(() => {
     if (id) return;
     readCachedList().then((c) => {
-      if (c?.rows.length) setPickable(c.rows.slice(0, 6));
+      if (c?.rows.length) {
+        setPickable(c.rows.slice(0, 6));
+        setPickedId((cur) => cur ?? c.rows[0].id);
+      }
     });
   }, [id]);
 
   const author = useMemo(() => (user ? { id: user.id, name: user.name, role: user.role } : null), [user]);
-  const doc = useInspectionDoc(id || undefined, deviceId, author, {});
+  const doc = useInspectionDoc(sessionId, deviceId, author, {});
   const mesh = useMesh();
   const meshForThis = !!sessionId && mesh.inspectionId === sessionId;
   const meshPeersHere = useMemo(() => (meshForThis ? mesh.peers : []), [meshForThis, mesh.peers]);
@@ -218,12 +223,12 @@ export default function MeshNetworkScreen() {
         {/* Members */}
         <View style={styles.peersSection}>
           <View style={styles.peersHeaderRow}>
-            <Text style={styles.peersTitle}>{id ? `Connected members (${members.length})` : 'Connected members'}</Text>
-            {id ? (
+            <Text style={styles.peersTitle}>{sessionId ? `Connected members (${members.length})` : 'Connected members'}</Text>
+            {sessionId ? (
               <Text style={styles.meshVersion}>{doc.status === 'connected' ? (doc.synced ? 'cloud · synced' : 'cloud · syncing') : 'cloud · offline'}</Text>
             ) : null}
           </View>
-          {!id ? (
+          {!sessionId ? (
             <View style={styles.emptyBox}>
               <FieldMeshIcon name="groups" size={26} color={FieldMeshColors.outline} />
               <Text style={styles.emptyText}>Members are tracked per inspection. Open a checklist and tap its “On site” badge to see who is connected and how.</Text>
