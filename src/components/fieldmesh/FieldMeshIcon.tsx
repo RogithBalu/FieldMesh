@@ -19,6 +19,7 @@ const ICON_MAP: Record<string, keyof typeof MaterialIcons.glyphMap> = {
   close: 'close',
   warning: 'warning',
   info: 'info',
+  info_outline: 'info-outline',
   schedule: 'schedule',
   calendar_today: 'calendar-today',
   location_on: 'location-on',
@@ -40,6 +41,7 @@ const ICON_MAP: Record<string, keyof typeof MaterialIcons.glyphMap> = {
   badge: 'badge',
   dialpad: 'dialpad',
   lock: 'lock',
+  lock_outline: 'lock-outline',
   visibility: 'visibility',
   visibility_off: 'visibility-off',
   contactless: 'contactless',
@@ -51,6 +53,12 @@ const ICON_MAP: Record<string, keyof typeof MaterialIcons.glyphMap> = {
   login: 'login',
   arrow_forward: 'arrow-forward',
   phone_android: 'phone-android',
+  fingerprint: 'fingerprint',
+  mail: 'mail-outline',
+  mail_outline: 'mail-outline',
+  email: 'email',
+  east: 'east',
+  hub: 'hub',
 };
 
 export const FieldMeshIcon: React.FC<FieldMeshIconProps> = ({
@@ -58,6 +66,6 @@ export const FieldMeshIcon: React.FC<FieldMeshIconProps> = ({
   size = 20,
   color = '#141b2b',
 }) => {
-  const iconName = ICON_MAP[name] || (name as keyof typeof MaterialIcons.glyphMap);
+  const iconName = ICON_MAP[name] || (name as keyof typeof MaterialIcons.glyphMap) || 'circle';
   return <MaterialIcons name={iconName} size={size} color={color} />;
 };
