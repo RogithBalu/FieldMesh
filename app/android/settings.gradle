@@ -1,0 +1,16 @@
+pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension){ ex ->
+  // pnpm workspace: the lockfile and patchedDependencies live at the monorepo root, which the
+  // plugin's default lockFiles never watch, so a stale autolinking.json would otherwise be reused.
+  def npx = System.getProperty('os.name').toLowerCase().contains('windows') ? 'npx.cmd' : 'npx'
+  def appDir = layout.rootDirectory.dir('../')
+  ex.autolinkLibrariesFromCommand(
+    [npx, '@react-native-community/cli', 'config'],
+    appDir.asFile,
+    appDir.files('package.json', 'react-native.config.js', '../package.json', '../pnpm-lock.yaml')
+  )
+}
+rootProject.name = 'FieldMeshApp'
+include ':app'
+includeBuild('../node_modules/@react-native/gradle-plugin')
