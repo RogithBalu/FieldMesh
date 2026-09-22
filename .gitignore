@@ -45,3 +45,5 @@ example
 # EAS local signing credentials (never commit)
 credentials.json
 credentials/
+
+modules/*/android/build/
