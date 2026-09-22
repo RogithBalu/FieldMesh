@@ -27,7 +27,8 @@ Offline-first field inspections: every phone keeps working without signal, and w
 4. **Reconnect → disputes (60 s)** — airplane mode off. Within seconds both phones show "2 items need review": Insulation (PASS vs FAIL) and Oil Temperature (79 vs 95, outside tolerance). Explain: each edit carries a hybrid logical clock and the ids of the entries it saw; two entries with the same parents were made blind to each other, so the server flags them instead of silently picking one. Note the 74→79 change was *not* a dispute — the tolerance rule absorbed it.
 5. **Human-in-the-loop (60 s)** — on the supervisor's phone tap Resolve on Insulation. The screen shows both entries side by side; the merge rule defaulted to FAIL for safety. Confirm FAIL (or override to PASS with a mandatory justification). Resolve the temperature by picking 79. Both phones clear the dispute instantly — the resolution is one signed edit naming both conflicting entries as parents.
 6. **Audit + report (45 s)** — open the audit trail (clock icon): every edit, who, which device, what it superseded, flagged rows. Then "View Report & Sign Off": the server-generated report — 0 disputed, verified photos with hashes, resolution notes.
-7. **Offline launch (30 s, optional)** — force-close the app on airplane mode and reopen: session, inspection list and checklist all load from the phone; the badge says "Saved on phone", and everything syncs when signal returns.
+7. **Offline mesh — two phones, no internet at all (90 s)** — put BOTH phones in airplane mode, then switch Bluetooth and Wi-Fi back on (airplane mode keeps mobile data off). On each phone open the inspection and tap "Start mesh" in the blue banner (or the "On site" badge → Site Session → Start offline mesh). Grant the Nearby/Bluetooth permission. Within ~10 s the checklist badge reads "Mesh · 2 nearby" and the Site Session screen lists the other phone with its medium (Bluetooth, then Wi-Fi Direct / hotspot once Nearby upgrades the link). Change a value on one phone; it appears on the other with no server involved. Now re-enable mobile data on ONE phone only: its Site Session row shows "Internet", the other phone's row gains "RELAYS TO CLOUD", and both phones' edits reach the server through that single phone — the audit trail on the laptop shows edits from both devices.
+8. **Offline launch (30 s, optional)** — force-close the app on airplane mode and reopen: session, inspection list and checklist all load from the phone; the badge says "Saved on phone", and everything syncs when signal returns.
 
 ## If something goes wrong on stage
 
@@ -35,10 +36,13 @@ Offline-first field inspections: every phone keeps working without signal, and w
 - Only one phone available → run the teammate simulator from the laptop to create the conflicting edits:
   `cd Backend/server && BASE=http://98.80.162.7:3000 WS=ws://98.80.162.7:1234 EMAIL=priya@test.dev INSPECTION=<id> FIELD=insulation_condition VALUE=fail pnpm test:teammate` (the inspection id is in the Site Session screen / list card).
 - Want a clean slate → sign up with new emails; each team is isolated.
+- Mesh does not find the other phone → both phones must have Bluetooth AND Wi-Fi on, location services on (Android ≤ 12), Google Play services present, and the same inspection open with "Start mesh" tapped on both. Keep them within a few metres. The mesh is per inspection: starting it on another inspection replaces the session.
+- Expo Go cannot run the mesh (it needs the native Nearby module): use the installed APK for the offline part of the demo.
 
 ## Talking points
 
 - Offline-first: SQLite-free on the phone — the checklist is a Yjs CRDT document persisted locally and synced through Hocuspocus; no lost writes, no manual merge screens.
+- Offline mesh: Google Nearby Connections (Bluetooth discovery, automatic Wi-Fi Direct / hotspot upgrade) with one Yjs sync per link on the same document, so a phone with internet relays for every phone linked to it — the "chain relay". Each member's medium is shown on the Site Session screen.
 - Safety rules live on the server (`shared/src/editlog/rules.ts`): fail-beats-pass, numeric tolerance bands, photos always kept.
 - Photos are content-addressed and verified byte-for-byte on upload (tus resumable uploads survive dropped connections).
 - Every route is JWT-authenticated and team-scoped; the WebSocket refuses non-members.

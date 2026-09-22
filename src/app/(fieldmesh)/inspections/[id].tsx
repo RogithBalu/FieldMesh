@@ -15,18 +15,21 @@ import { useInspectionDoc, defsFrom, type SyncStatus } from '@/lib/useInspection
 import { buildChecklist, relativeTime } from '@/lib/checklist';
 import { ensureUploaded, isPhotoHash, pickPhoto, retryPendingUploads, savePhotoMeta, type PhotoSource } from '@/lib/photos';
 import { nameFor } from '@/lib/names';
+import { useMesh } from '@/lib/mesh/useMesh';
+import { isMeshAvailable, meshLabel, startMesh } from '@/lib/mesh/meshSession';
 import { upsertCachedInspection } from '@/lib/inspectionsCache';
 import { CHECKLIST_TEMPLATE } from '@/constants/checklistTemplate';
 
 type UploadState = 'uploading' | 'uploaded' | 'queued' | 'failed';
 
-function syncBadge(status: SyncStatus, synced: boolean, unsynced: number, peers: number) {
+function syncBadge(status: SyncStatus, synced: boolean, unsynced: number, peers: number, meshLinked: number) {
   if (status === 'connected') {
     return {
       label: synced ? (peers > 0 ? `Live · ${peers + 1} on site` : 'Live sync') : 'Syncing…',
       variant: 'connected' as const,
     };
   }
+  if (meshLinked > 0) return { label: `Mesh · ${meshLinked + 1} nearby`, variant: 'connected' as const };
   if (status === 'connecting') return { label: 'Connecting…', variant: 'warning' as const };
   if (status === 'unauthorized') return { label: 'Sign in again', variant: 'warning' as const };
   return { label: unsynced > 0 ? `Saved on phone · ${unsynced} pending` : 'Saved on phone', variant: 'offline' as const };
@@ -53,6 +56,21 @@ export default function InspectionDetailScreen() {
     [user]
   );
   const doc = useInspectionDoc(id, deviceId, author, defs);
+  const mesh = useMesh();
+  const meshForThis = !!id && mesh.inspectionId === id;
+  const meshPeers = meshForThis ? mesh.peers : [];
+  const meshOn = meshForThis && (mesh.status === 'searching' || mesh.status === 'linked' || mesh.status === 'starting');
+  const [meshStarting, setMeshStarting] = useState(false);
+
+  const handleStartMesh = async () => {
+    if (!id || !user || !deviceId) return;
+    setMeshStarting(true);
+    try {
+      await startMesh(id, { userId: user.id, name: user.name, role: user.role, deviceId });
+    } finally {
+      setMeshStarting(false);
+    }
+  };
 
   // GET /inspections/:id — metadata + field definitions; cached for offline opens.
   // Re-fetched whenever live sync (re)connects so an offline banner clears itself.
@@ -167,8 +185,10 @@ export default function InspectionDetailScreen() {
   const total = checklist.length;
   const completed = checklist.filter((f) => doc.fieldValue(f.fieldId) !== undefined).length;
   const disputedIds = new Set<string>([...serverDisputed, ...doc.disputedFields()].filter((f) => !f.startsWith('_')));
-  const peersOnSite = doc.peers.filter((p) => !p.self).length;
-  const badge = syncBadge(doc.status, doc.synced, doc.unsyncedChanges, peersOnSite);
+  const cloudPeerKeys = new Set(doc.peers.filter((p) => !p.self).map((p) => `${p.userId ?? p.clientId}|${p.device ?? ''}`));
+  const meshOnly = meshPeers.filter((p) => !cloudPeerKeys.has(`${p.userId ?? p.endpointId}|${p.device ?? ''}`));
+  const peersOnSite = cloudPeerKeys.size + meshOnly.length;
+  const badge = syncBadge(doc.status, doc.synced, doc.unsyncedChanges, peersOnSite, meshPeers.length);
 
   return (
     <View style={styles.container}>
@@ -200,6 +220,26 @@ export default function InspectionDetailScreen() {
             <Text style={styles.infoBannerText}>{loadError}</Text>
           </View>
         )}
+        {doc.status !== 'connected' && !meshOn && isMeshAvailable() && (
+          <View style={styles.meshBanner}>
+            <FieldMeshIcon name="sensors" size={18} color={FieldMeshColors.primary} />
+            <Text style={styles.meshBannerText}>No internet? Link nearby phones directly.</Text>
+            <Pressable onPress={handleStartMesh} disabled={meshStarting} style={({ pressed }) => [styles.meshBannerBtn, pressed && styles.pressed]} testID="start-mesh">
+              {meshStarting ? <ActivityIndicator size="small" color={FieldMeshColors.onPrimary} /> : <Text style={styles.meshBannerBtnText}>Start mesh</Text>}
+            </Pressable>
+          </View>
+        )}
+        {meshOn && (
+          <Pressable onPress={() => router.push({ pathname: '/(fieldmesh)/mesh', params: { id } })} style={styles.meshStrip} testID="mesh-strip">
+            <FieldMeshIcon name="sensors" size={16} color={FieldMeshColors.onSecondaryContainer} />
+            <Text style={styles.meshStripText} numberOfLines={2}>
+              {mesh.status === 'linked'
+                ? `Offline mesh · ${meshPeers.length} phone${meshPeers.length === 1 ? '' : 's'} linked (${[...new Set(meshPeers.map((p) => meshLabel(p.medium)))].join(', ')})${meshPeers.some((p) => p.relaysToCloud) ? ' · relayed to cloud' : ''}`
+                : 'Offline mesh · searching for nearby phones…'}
+            </Text>
+            <FieldMeshIcon name="chevron_right" size={18} color={FieldMeshColors.onSecondaryContainer} />
+          </Pressable>
+        )}
         {doc.status === 'unauthorized' && (
           <View style={styles.warnBanner}>
             <FieldMeshIcon name="warning" size={16} color={FieldMeshColors.onTertiaryFixed} />
@@ -217,11 +257,12 @@ export default function InspectionDetailScreen() {
             </View>
             <Pressable
               onPress={() => router.push({ pathname: '/(fieldmesh)/mesh', params: { id } })}
-              style={[styles.peerBadge, doc.status !== 'connected' && styles.peerBadgeOffline]}
+              style={[styles.peerBadge, doc.status !== 'connected' && meshPeers.length === 0 && styles.peerBadgeOffline]}
+              testID="on-site-badge"
             >
-              <View style={[styles.pulsingDot, doc.status !== 'connected' && styles.dotOffline]} />
+              <View style={[styles.pulsingDot, doc.status !== 'connected' && meshPeers.length === 0 && styles.dotOffline]} />
               <Text style={styles.peerBadgeText}>
-                {doc.status === 'connected' ? `On site · ${peersOnSite + 1}` : 'Offline'}
+                {doc.status === 'connected' || meshPeers.length > 0 ? `On site · ${peersOnSite + 1}` : 'Offline'}
               </Text>
             </Pressable>
           </View>
@@ -469,6 +510,12 @@ const styles = StyleSheet.create({
   headerBtn: { width: 34, height: 34, borderRadius: FieldMeshRadius.md, backgroundColor: FieldMeshColors.surfaceContainerHigh, alignItems: 'center', justifyContent: 'center' },
   infoBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.surfaceContainerHigh, padding: 10, borderRadius: FieldMeshRadius.md },
   infoBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onSurfaceVariant },
+  meshBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.primaryFixed, padding: 10, borderRadius: FieldMeshRadius.md },
+  meshBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onPrimaryFixed },
+  meshBannerBtn: { backgroundColor: FieldMeshColors.primary, paddingHorizontal: 12, height: 34, borderRadius: FieldMeshRadius.sm, alignItems: 'center', justifyContent: 'center', minWidth: 96 },
+  meshBannerBtnText: { fontSize: 12, fontWeight: '700', color: FieldMeshColors.onPrimary },
+  meshStrip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.secondaryContainer, padding: 10, borderRadius: FieldMeshRadius.md },
+  meshStripText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onSecondaryContainer },
   warnBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.tertiaryFixed, padding: 10, borderRadius: FieldMeshRadius.md },
   warnBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onTertiaryFixed },
   contextCard: { backgroundColor: FieldMeshColors.surfaceLowest, padding: FieldMeshSpacing.md, borderRadius: FieldMeshRadius.lg, borderWidth: 1, borderColor: FieldMeshColors.surfaceContainerHigh, gap: 12 },

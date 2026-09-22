@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.fieldmesh'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.fieldmeshnearby"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+dependencies {
+  // Google Nearby Connections: offline phone-to-phone links over Bluetooth / Wi-Fi Direct.
+  implementation("com.google.android.gms:play-services-nearby:19.3.0")
+}
