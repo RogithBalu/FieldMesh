@@ -38,9 +38,11 @@ Offline-first field inspections: every phone keeps working without signal, and w
   `cd Backend/server && BASE=http://98.80.162.7:3000 WS=ws://98.80.162.7:1234 EMAIL=priya@test.dev INSPECTION=<id> FIELD=insulation_condition VALUE=fail pnpm test:teammate` (the inspection id is in the Site Session screen / list card).
 - Want a clean slate → sign up with new emails; each team is isolated.
 - Mesh does not find the other phone → both phones must have Bluetooth AND Wi-Fi on, location services on (Android ≤ 12), Google Play services present, and the same inspection open with "Start mesh" tapped on both. Keep them within a few metres. The mesh is per inspection: starting it on another inspection replaces the session.
+- Mesh shows "Found nearby: … · connecting…" for more than ~30 s (typical right after toggling airplane mode or Bluetooth) → the app now re-dials and, if still unlinked, restarts Nearby by itself within ~30 s. On a build older than 2026-09-23, tap "Stop offline mesh" then "Start offline mesh" on the phone whose name sorts first (the dialing side) — that relinks immediately.
 - Expo Go cannot run the mesh or the hotspot (they need the native modules in `modules/`): use the installed APK for the offline part of the demo. The QR scanner does work in Expo Go.
 - Hotspot join fails → the joiner can connect to the host's SSID manually from Wi-Fi settings (use the passphrase on the host's screen), then tap "Retry connecting to the hub".
-- Hotspot start fails with "incompatible mode" → the host phone already has tethering/hotspot on; switch it off first. Local-only hotspots get a random SSID/passphrase from Android — that is expected.
+- Hotspot start fails with "incompatible mode" → the host phone already has its own mobile hotspot on. Builds from 2026-09-23 onward fall back to hosting the hub on that hotspot (teammates join it from Wi-Fi settings, then scan the session QR); older builds need the phone's hotspot switched off first. Local-only hotspots get a random SSID/passphrase from Android (e.g. AndroidShare_1234) — that is expected.
+- Joining works in airplane mode as long as Wi-Fi is switched back on; the joiner's phone keeps mobile data off and still relays through the host.
 
 ## Talking points
 

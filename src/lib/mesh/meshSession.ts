@@ -264,6 +264,75 @@ function mediumFor(quality: number): MeshMedium {
   return quality === 3 ? 'wifi' : quality === 2 ? 'bluetooth' : quality === 1 ? 'bluetooth-le' : 'unknown';
 }
 
+/** The phone with the smaller device suffix dials, so a pair connects once. */
+function iDial(myName: string, theirName: string): boolean {
+  return suffixOf(myName) < suffixOf(theirName);
+}
+
+// Endpoints found but not (yet) linked, with dial/retry bookkeeping. Nearby
+// reports an endpoint once per discovery, so a failed or lost dial has to be
+// retried by us — and after a radio reset (airplane mode, Bluetooth toggled)
+// the old endpoint can linger without a fresh onEndpointFound, so a session
+// that stays unlinked too long is restarted for fresh endpoint ids.
+const dials = new Map<string, { name: string; firstSeen: number; lastDial: number; attempts: number }>();
+let nearbyWatchdog: ReturnType<typeof setInterval> | null = null;
+let nearbyServiceId: string | null = null;
+let nearbyMyName: string | null = null;
+let nearbyRestarting = false;
+const NEARBY_TICK_MS = 3000;
+const DIAL_RETRY_MS = 6000; // re-dial an unlinked endpoint this often
+const DIAL_FALLBACK_MS = 15000; // the non-dialing side dials too after waiting this long
+const NEARBY_STUCK_MS = 30000; // no link at all for this long with a known endpoint → restart Nearby
+
+function dialEndpoint(endpointId: string) {
+  const d = dials.get(endpointId);
+  if (!d || !nearbyMyName || links.has(`nearby:${endpointId}`)) return;
+  d.lastDial = Date.now();
+  d.attempts++;
+  FieldMeshNearby?.requestConnection(nearbyMyName, endpointId).catch((err: Error) => {
+    setState({ error: `Connect to ${d.name.split('#')[0]} failed: ${err.message}` });
+  });
+}
+
+function nearbyLinkCount(): number {
+  let n = 0;
+  for (const id of links.keys()) if (id.startsWith('nearby:')) n++;
+  return n;
+}
+
+function nearbyTick() {
+  if (!nearbyServiceId || !nearbyMyName || nearbyRestarting) return;
+  const now = Date.now();
+  let stuck = false;
+  for (const [endpointId, d] of dials) {
+    if (links.has(`nearby:${endpointId}`)) continue;
+    const waited = now - d.firstSeen;
+    if (waited > NEARBY_STUCK_MS) stuck = true;
+    const dialer = iDial(nearbyMyName, d.name) || waited > DIAL_FALLBACK_MS;
+    if (dialer && now - d.lastDial >= DIAL_RETRY_MS) dialEndpoint(endpointId);
+  }
+  // Only restart when nothing is linked: a restart drops every Nearby link.
+  if (stuck && nearbyLinkCount() === 0) void restartNearby();
+}
+
+async function restartNearby(): Promise<void> {
+  const native = FieldMeshNearby;
+  if (!native || !nearbyServiceId || !nearbyMyName || nearbyRestarting) return;
+  nearbyRestarting = true;
+  try {
+    for (const id of [...links.keys()]) if (id.startsWith('nearby:')) detachLink(id);
+    dials.clear();
+    setState({ discovered: [], error: null });
+    await native.stopAll();
+    await native.startAdvertising(nearbyServiceId, nearbyMyName);
+    await native.startDiscovery(nearbyServiceId);
+  } catch (e) {
+    setState({ error: (e as Error).message ?? 'Could not restart Nearby' });
+  } finally {
+    nearbyRestarting = false;
+  }
+}
+
 export async function startMesh(inspectionId: string, id: MeshIdentity): Promise<void> {
   if (!FieldMeshNearby) {
     setState({ status: 'unavailable', error: 'The offline mesh needs the installed FieldMesh app (not Expo Go).' });
@@ -287,24 +356,34 @@ export async function startMesh(inspectionId: string, id: MeshIdentity): Promise
   const native = FieldMeshNearby;
   const myName = endpointNameFor(id);
   const serviceId = serviceIdFor(inspectionId);
+  nearbyMyName = myName;
+  nearbyServiceId = serviceId;
 
   nearbySubs.push(
     native.addListener('onEndpointFound', (e) => {
       if (e.serviceId && e.serviceId !== serviceId) return;
+      const seen = dials.get(e.endpointId);
+      dials.set(e.endpointId, { name: e.name, firstSeen: seen?.firstSeen ?? Date.now(), lastDial: 0, attempts: 0 });
       setState({ discovered: [...state.discovered.filter((d) => d.endpointId !== e.endpointId), { endpointId: e.endpointId, name: e.name }] });
-      if (suffixOf(myName) < suffixOf(e.name) && !links.has(`nearby:${e.endpointId}`)) {
-        native.requestConnection(myName, e.endpointId).catch((err: Error) => {
-          setState({ error: `Connect to ${e.name.split('#')[0]} failed: ${err.message}` });
-        });
-      }
+      if (iDial(myName, e.name)) dialEndpoint(e.endpointId);
     }),
     native.addListener('onEndpointLost', (e) => {
+      dials.delete(e.endpointId);
       setState({ discovered: state.discovered.filter((d) => d.endpointId !== e.endpointId) });
     }),
-    native.addListener('onConnected', (e) =>
-      attachLink(`nearby:${e.endpointId}`, new NearbyTransport(e.endpointId), { via: 'nearby', medium: 'unknown', endpointName: e.name, name: e.name.split('#')[0] })
-    ),
-    native.addListener('onDisconnected', (e) => detachLink(`nearby:${e.endpointId}`)),
+    native.addListener('onConnected', (e) => {
+      setState({ error: null });
+      attachLink(`nearby:${e.endpointId}`, new NearbyTransport(e.endpointId), { via: 'nearby', medium: 'unknown', endpointName: e.name, name: e.name.split('#')[0] });
+    }),
+    native.addListener('onDisconnected', (e) => {
+      detachLink(`nearby:${e.endpointId}`);
+      // Still discovered → the watchdog re-dials it; start its clock afresh.
+      const d = dials.get(e.endpointId);
+      if (d) {
+        d.firstSeen = Date.now();
+        d.lastDial = 0;
+      }
+    }),
     native.addListener('onBandwidthChanged', (e) => {
       const link = links.get(`nearby:${e.endpointId}`);
       if (!link) return;
@@ -317,6 +396,8 @@ export async function startMesh(inspectionId: string, id: MeshIdentity): Promise
     await native.startAdvertising(serviceId, myName);
     await native.startDiscovery(serviceId);
     setState({ status: 'searching' });
+    if (nearbyWatchdog) clearInterval(nearbyWatchdog);
+    nearbyWatchdog = setInterval(nearbyTick, NEARBY_TICK_MS);
   } catch (e) {
     setState({ status: 'error', error: (e as Error).message ?? 'Could not start Nearby' });
     await stopMesh();
@@ -324,6 +405,13 @@ export async function startMesh(inspectionId: string, id: MeshIdentity): Promise
 }
 
 export async function stopMesh(): Promise<void> {
+  if (nearbyWatchdog) {
+    clearInterval(nearbyWatchdog);
+    nearbyWatchdog = null;
+  }
+  nearbyServiceId = null;
+  nearbyMyName = null;
+  dials.clear();
   for (const id of [...links.keys()]) if (id.startsWith('nearby:')) detachLink(id);
   for (const s of nearbySubs) s.remove();
   nearbySubs = [];
