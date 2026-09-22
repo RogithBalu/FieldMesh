@@ -7,7 +7,8 @@
     "preview": {
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "credentialsSource": "local"
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "http://98.80.162.7:3000",
@@ -18,12 +19,14 @@
       "developmentClient": true,
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "credentialsSource": "local"
       }
     },
     "production": {
       "android": {
-        "buildType": "app-bundle"
+        "buildType": "app-bundle",
+        "credentialsSource": "local"
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "http://98.80.162.7:3000",
