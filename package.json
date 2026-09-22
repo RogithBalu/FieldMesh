@@ -6,7 +6,15 @@
     "dev:server": "pnpm --filter @fieldmesh/server dev",
     "build:shared": "pnpm --filter @fieldmesh/shared build",
     "dev:shared": "pnpm --filter @fieldmesh/shared dev",
-    "migrate": "pnpm --filter @fieldmesh/server migrate"
+    "migrate": "pnpm --filter @fieldmesh/server migrate",
+    "deploy:lightsail": "node scripts/deploy-lightsail.mjs",
+    "test:app": "pnpm --filter FieldMeshApp test",
+    "android": "pnpm --filter FieldMeshApp android"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-lightsail": "^3.1137.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "^3.1137.0"
   },
   "pnpm": {
     "patchedDependencies": {

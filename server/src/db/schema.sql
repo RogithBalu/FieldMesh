@@ -69,3 +69,12 @@ CREATE TABLE IF NOT EXISTS devices (
   user_id TEXT NOT NULL REFERENCES users(id),
   last_seen INTEGER
 );
+
+CREATE TABLE IF NOT EXISTS field_defs (
+  inspection_id TEXT NOT NULL,
+  field_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  tolerance REAL,
+  PRIMARY KEY (inspection_id, field_id)
+);
+

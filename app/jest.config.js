@@ -10,6 +10,11 @@ const lib0Root = path.dirname(
 );
 const lib0BrowserWebcrypto = path.join(lib0Root, 'dist', 'webcrypto.cjs');
 
+// @fieldmesh/shared publishes only an "import" condition, so CJS resolution
+// (which Jest uses) can't see it. Metro resolves it fine; point Jest at the
+// same build rather than changing the shared package the server also consumes.
+const sharedDist = path.resolve(__dirname, '../shared/dist/index.js');
+
 module.exports = {
   preset: 'react-native',
   transformIgnorePatterns: [
@@ -30,5 +35,6 @@ module.exports = {
     // tests at that one and let them exercise lib0's real code against the
     // polyfilled global crypto rather than a stand-in.
     '^lib0/webcrypto$': lib0BrowserWebcrypto,
+    '^@fieldmesh/shared$': sharedDist,
   },
 };
