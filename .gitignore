@@ -45,3 +45,7 @@ example
 # EAS local signing credentials (never commit)
 credentials.json
 credentials/
+
+# Gradle output inside the local Expo modules
+modules/**/build/
+modules/**/.gradle/
