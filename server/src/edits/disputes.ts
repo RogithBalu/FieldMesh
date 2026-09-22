@@ -34,7 +34,7 @@ interface FieldDefRow {
 const selectEditsStmt = db.prepare(`
   SELECT edit_id, field_id, value, author, device, hlc, parents, schema_version, disputed
   FROM edits
-  WHERE inspection_id = ? AND field_id = ?
+  WHERE inspection_id = ? AND field_id = ? AND post_finalize = 0
 `);
 
 const selectFieldDefStmt = db.prepare(`

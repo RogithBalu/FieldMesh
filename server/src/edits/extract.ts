@@ -12,14 +12,28 @@ const insertEditStmt = db.prepare(`
     device,
     hlc,
     parents,
-    schema_version
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    schema_version,
+    post_finalize
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   RETURNING field_id
 `);
+
+const finalizedStmt = db.prepare(
+  "SELECT finalized_at FROM inspections WHERE id = ?"
+);
 
 const insertEditsTx = db.transaction(
   (inspectionId: string, entries: Array<{ id: string; entry: Partial<EditEntry> }>) => {
     const newFieldIds = new Set<string>();
+
+    // A phone that was offline when the inspection was signed off still pushes
+    // its edits on reconnect. They are kept — losing them would defeat the
+    // audit trail — but stamped so the merge ignores them and a reviewer can
+    // see what arrived late.
+    const inspection = finalizedStmt.get(inspectionId) as
+      | { finalized_at: number | null }
+      | undefined;
+    const postFinalize = inspection?.finalized_at ? 1 : 0;
 
     for (const { id, entry } of entries) {
       const fieldId = entry.fieldId;
@@ -40,7 +54,8 @@ const insertEditsTx = db.transaction(
         entry.device ?? "",
         entry.hlc ?? "",
         parentsJson,
-        entry.schemaVersion ?? 1
+        entry.schemaVersion ?? 1,
+        postFinalize
       ) as { field_id: string } | undefined;
 
       if (res?.field_id) {

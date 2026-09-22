@@ -11,6 +11,7 @@ import {
 } from "@fieldmesh/shared";
 import { getHocuspocus } from "../sync/hocuspocus.js";
 import { denyIfNoAccess, inspectionAccess, isTeamMember } from "./access.js";
+import { denyUnlessRole, REOPEN_ROLES, REVIEWER_ROLES } from "../auth/roles.js";
 import { isNonEmptyString, jsonBody } from "../utils/body.js";
 
 // Mirrors FieldType in shared/src/schema.ts; the dispute engine only knows
@@ -35,6 +36,38 @@ const selectFieldDefsStmt = db.prepare(
 const insertFieldDefStmt = db.prepare(
   "INSERT OR REPLACE INTO field_defs (inspection_id, field_id, type, tolerance) VALUES (?, ?, ?, ?)"
 );
+
+const finalizedStmt = db.prepare(
+  "SELECT finalized_at, finalized_by FROM inspections WHERE id = ?"
+);
+
+export interface FinalizedState {
+  finalized_at: number | null;
+  finalized_by: string | null;
+}
+
+function finalizedState(id: string): FinalizedState | undefined {
+  return finalizedStmt.get(id) as FinalizedState | undefined;
+}
+
+/**
+ * Sends 409 when the inspection has been signed off; returns true if it did.
+ * A finalized inspection accepts no further changes until an auditor re-opens
+ * it, so every mutating route checks this before doing any work.
+ */
+function denyIfFinalized(
+  id: string,
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const row = finalizedState(id);
+  if (!row?.finalized_at) return false;
+  reply.code(409).send({
+    error: "inspection is finalized; an auditor must re-open it first",
+    finalizedAt: row.finalized_at,
+    finalizedBy: row.finalized_by,
+  });
+  return true;
+}
 
 /**
  * Validates the optional `fields` array on inspection creation. Returns the
@@ -197,6 +230,8 @@ export async function inspectionRoutes(app: FastifyInstance) {
   // Supervisor resolution: writes a new edit whose parents are all current
   // disputed heads for the field, closing out the dispute. The new edit
   // becomes the sole head, so recomputeDisputes() settles it to disputed=0.
+  // Restricted to reviewers: settling a dispute can turn a safety FAIL into a
+  // PASS, which is not a technician's call to make.
   app.post(
     "/inspections/:id/resolve",
     { onRequest: [authenticate] },
@@ -204,6 +239,8 @@ export async function inspectionRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string };
       const sub = (req.user as any).sub;
       if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
+      if (denyUnlessRole(sub, REVIEWER_ROLES, reply)) return;
+      if (denyIfFinalized(id, reply)) return;
 
       const { fieldId, value, device, schemaVersion } = jsonBody<{
         fieldId: string;
@@ -260,6 +297,95 @@ export async function inspectionRoutes(app: FastifyInstance) {
       }
 
       return { editId };
+    }
+  );
+
+  /**
+   * Sign-off. Refuses while any field is still disputed: finalizing over an
+   * unsettled safety conflict would bury exactly what review exists to catch.
+   * Pass `{ force: true }` to sign off anyway, which an auditor may need when
+   * a dispute cannot be settled on site; the disputes stay on the record.
+   */
+  app.post(
+    "/inspections/:id/finalize",
+    { onRequest: [authenticate] },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const sub = (req.user as any).sub;
+      if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
+      if (denyUnlessRole(sub, REVIEWER_ROLES, reply)) return;
+
+      const existing = finalizedState(id);
+      if (existing?.finalized_at) {
+        return reply.code(409).send({
+          error: "inspection is already finalized",
+          finalizedAt: existing.finalized_at,
+          finalizedBy: existing.finalized_by,
+        });
+      }
+
+      const { force } = jsonBody<{ force?: boolean }>(req);
+      const open = db
+        .prepare(
+          "SELECT DISTINCT field_id FROM edits WHERE inspection_id = ? AND disputed = 1 AND post_finalize = 0"
+        )
+        .all(id) as { field_id: string }[];
+      if (open.length > 0 && force !== true) {
+        return reply.code(409).send({
+          error: "resolve the open disputes first, or finalize with force",
+          disputedFields: open.map((r) => r.field_id),
+        });
+      }
+
+      const finalizedAt = Date.now();
+      db.prepare(
+        "UPDATE inspections SET finalized_at = ?, finalized_by = ? WHERE id = ?"
+      ).run(finalizedAt, sub, id);
+
+      return {
+        finalizedAt,
+        finalizedBy: sub,
+        forcedOverDisputes: open.length > 0,
+      };
+    }
+  );
+
+  /**
+   * Re-opening reverses a sign-off, so it is an auditor-only override — a
+   * supervisor cannot undo their own finalization. Edits that arrived while
+   * the inspection was closed stay flagged; they are deliberately not folded
+   * back into the merged value, since nobody has reviewed them.
+   */
+  app.post(
+    "/inspections/:id/reopen",
+    { onRequest: [authenticate] },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const sub = (req.user as any).sub;
+      if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
+      if (denyUnlessRole(sub, REOPEN_ROLES, reply)) return;
+
+      const existing = finalizedState(id);
+      if (!existing?.finalized_at) {
+        return reply.code(409).send({ error: "inspection is not finalized" });
+      }
+
+      db.prepare(
+        "UPDATE inspections SET finalized_at = NULL, finalized_by = NULL WHERE id = ?"
+      ).run(id);
+
+      const lateEdits = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM edits WHERE inspection_id = ? AND post_finalize = 1"
+        )
+        .get(id) as { n: number };
+
+      return {
+        reopenedBy: sub,
+        wasFinalizedAt: existing.finalized_at,
+        wasFinalizedBy: existing.finalized_by,
+        lateEdits: lateEdits.n,
+      };
     }
   );
 }

@@ -24,7 +24,11 @@ CREATE TABLE IF NOT EXISTS inspections (
   site TEXT,
   created_by TEXT NOT NULL REFERENCES users(id),
   created_at INTEGER NOT NULL,
-  schema_version INTEGER NOT NULL DEFAULT 1
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  -- Set when a supervisor or auditor signs the inspection off; cleared only
+  -- by an auditor re-opening it. NULL means still being worked on.
+  finalized_at INTEGER,
+  finalized_by TEXT REFERENCES users(id)
 );
 
 CREATE TABLE IF NOT EXISTS yjs_documents (
@@ -51,7 +55,11 @@ CREATE TABLE IF NOT EXISTS edits (
   hlc TEXT NOT NULL,
   parents TEXT,
   schema_version INTEGER NOT NULL,
-  disputed INTEGER NOT NULL DEFAULT 0
+  disputed INTEGER NOT NULL DEFAULT 0,
+  -- An edit that reached the server after the inspection was finalized:
+  -- kept for the audit trail, but excluded from the merged value so a late
+  -- offline phone cannot move a signed-off reading.
+  post_finalize INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_edits_inspection ON edits(inspection_id);
 
