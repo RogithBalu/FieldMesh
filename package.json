@@ -1,0 +1,16 @@
+{
+  "name": "fieldmesh",
+  "private": true,
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev:server": "pnpm --filter @fieldmesh/server dev",
+    "build:shared": "pnpm --filter @fieldmesh/shared build",
+    "dev:shared": "pnpm --filter @fieldmesh/shared dev",
+    "migrate": "pnpm --filter @fieldmesh/server migrate"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@react-native-community/cli-platform-android@14.1.0": "patches/@react-native-community__cli-platform-android@14.1.0.patch"
+    }
+  }
+}

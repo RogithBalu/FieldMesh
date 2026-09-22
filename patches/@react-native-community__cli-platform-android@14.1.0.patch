@@ -1,0 +1,13 @@
+diff --git a/build/config/findPackageClassName.js b/build/config/findPackageClassName.js
+index cc9858ae1ca84c158b2b7afd8907967acb796d07..ba0de7b7e65422bf3a15a88819689c79c7facbe4 100644
+--- a/build/config/findPackageClassName.js
++++ b/build/config/findPackageClassName.js
+@@ -90,7 +90,7 @@ function matchClassName(file) {
+   if (nativeModuleMatch) {
+     return nativeModuleMatch;
+   } else {
+-    return file.match(/class\s+(\w+[^(\s]*)[\s\w():]*(\s+extends\s+|:)[\s\w():,]*[^{]*TurboReactPackage/);
++    return file.match(/class\s+(\w+[^(\s]*)[\s\w():]*(\s+extends\s+|:)[\s\w():,]*[^{]*(Turbo|Base)ReactPackage/);
+   }
+ }
+ 
