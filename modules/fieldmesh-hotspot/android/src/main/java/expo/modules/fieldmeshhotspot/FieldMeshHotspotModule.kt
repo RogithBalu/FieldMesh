@@ -210,9 +210,9 @@ class FieldMeshHotspotModule : Module() {
             override fun onFailed(reason: Int) {
               reservation = null
               val msg = when (reason) {
-                ERROR_NO_CHANNEL -> "No Wi-Fi channel available for a hotspot"
-                ERROR_INCOMPATIBLE_MODE -> "Wi-Fi is in an incompatible mode (tethering already on?)"
-                ERROR_TETHERING_DISALLOWED -> "Hotspots are disallowed on this device"
+                WifiManager.LocalOnlyHotspotCallback.ERROR_NO_CHANNEL -> "No Wi-Fi channel available for a hotspot"
+                WifiManager.LocalOnlyHotspotCallback.ERROR_INCOMPATIBLE_MODE -> "Wi-Fi is in an incompatible mode (tethering already on?)"
+                WifiManager.LocalOnlyHotspotCallback.ERROR_TETHERING_DISALLOWED -> "Hotspots are disallowed on this device"
                 else -> "Hotspot failed (reason $reason)"
               }
               promise.reject("E_HOTSPOT_FAILED", msg, null)
