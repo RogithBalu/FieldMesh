@@ -1,0 +1,2 @@
+#!/bin/bash
+exec python3 "/home/athidh/Athidh/Senguthar College Hackathon/frontend/scripts/adb-ui.py" "$@"

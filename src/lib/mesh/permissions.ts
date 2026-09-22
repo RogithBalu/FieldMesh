@@ -20,13 +20,14 @@ export async function requestMeshPermissions(): Promise<{ granted: boolean; miss
 }
 
 /** startLocalOnlyHotspot needs fine location up to Android 12 and NEARBY_WIFI_DEVICES from 13. */
-export async function requestHotspotPermissions(): Promise<{ granted: boolean; missing: string[] }> {
-  if (Platform.OS !== 'android') return { granted: false, missing: ['android only'] };
+export async function requestHotspotPermissions(): Promise<{ granted: boolean; missing: string[]; blocked: boolean }> {
+  if (Platform.OS !== 'android') return { granted: false, missing: ['android only'], blocked: false };
   const api = Platform.Version as number;
   const wanted: string[] = api >= 33 ? ['android.permission.NEARBY_WIFI_DEVICES'] : ['android.permission.ACCESS_FINE_LOCATION'];
-  const results = await PermissionsAndroid.requestMultiple(wanted as never[]);
-  const missing = wanted.filter((p) => (results as Record<string, string>)[p] !== PermissionsAndroid.RESULTS.GRANTED);
-  return { granted: missing.length === 0, missing: missing.map((m) => m.replace('android.permission.', '')) };
+  const results = (await PermissionsAndroid.requestMultiple(wanted as never[])) as Record<string, string>;
+  const missing = wanted.filter((p) => results[p] !== PermissionsAndroid.RESULTS.GRANTED);
+  const blocked = missing.some((p) => results[p] === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN);
+  return { granted: missing.length === 0, missing: missing.map((m) => m.replace('android.permission.', '')), blocked };
 }
 
 /** Android 13+ hides the hub's ongoing notification without POST_NOTIFICATIONS; the hub runs either way. */

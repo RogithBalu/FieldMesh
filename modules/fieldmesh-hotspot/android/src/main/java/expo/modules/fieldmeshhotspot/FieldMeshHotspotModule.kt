@@ -75,6 +75,23 @@ class FieldMeshHotspotModule : Module() {
 
   // ── helpers ────────────────────────────────────────────────────────────
 
+  /** Address of an active access-point interface (tethering or local-only hotspot), or null. */
+  private fun apInterface(): Map<String, String>? {
+    val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+    for (iface in interfaces) {
+      if (!iface.isUp || iface.isLoopback) continue
+      val name = iface.name.lowercase()
+      val isAp = name.startsWith("ap") || name.startsWith("softap") || name.startsWith("swlan") || name == "wlan1"
+      if (!isAp) continue
+      for (addr in iface.inetAddresses) {
+        if (addr is Inet4Address && !addr.isLoopbackAddress) {
+          return mapOf("name" to iface.name, "ip" to (addr.hostAddress ?: ""))
+        }
+      }
+    }
+    return null
+  }
+
   private fun hotspotIp(): String? {
     var fallback: String? = null
     val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
@@ -236,6 +253,8 @@ class FieldMeshHotspotModule : Module() {
     }
 
     Function("getHotspotIp") { hotspotIp() ?: "" }
+
+    Function("getApInterface") { apInterface() }
 
     // ── Wi-Fi client (spoke) ────────────────────────────────────────────
 

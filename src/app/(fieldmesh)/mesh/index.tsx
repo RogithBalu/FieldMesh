@@ -13,6 +13,7 @@ import { useInspectionDoc } from '@/lib/useInspectionDoc';
 import { useMesh } from '@/lib/mesh/useMesh';
 import { isMeshAvailable, meshLabel, startMesh, stopMesh } from '@/lib/mesh/meshSession';
 import { HotspotCard } from '@/components/fieldmesh/HotspotCard';
+import { readCachedList, type CachedRow } from '@/lib/inspectionsCache';
 import { nameFor } from '@/lib/names';
 
 interface Member {
@@ -43,11 +44,22 @@ export default function MeshNetworkScreen() {
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [meshBusy, setMeshBusy] = useState(false);
+  const [pickable, setPickable] = useState<CachedRow[]>([]);
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const sessionId = id || pickedId || undefined;
+
+  // Opened from the list header (no inspection): offer the cached inspections to host/join for.
+  useEffect(() => {
+    if (id) return;
+    readCachedList().then((c) => {
+      if (c?.rows.length) setPickable(c.rows.slice(0, 6));
+    });
+  }, [id]);
 
   const author = useMemo(() => (user ? { id: user.id, name: user.name, role: user.role } : null), [user]);
   const doc = useInspectionDoc(id || undefined, deviceId, author, {});
   const mesh = useMesh();
-  const meshForThis = !!id && mesh.inspectionId === id;
+  const meshForThis = !!sessionId && mesh.inspectionId === sessionId;
   const meshPeersHere = useMemo(() => (meshForThis ? mesh.peers : []), [meshForThis, mesh.peers]);
 
   const checkHealth = useCallback(async () => {
@@ -116,11 +128,11 @@ export default function MeshNetworkScreen() {
   };
 
   const toggleMesh = async () => {
-    if (!id || !user || !deviceId) return;
+    if (!sessionId || !user || !deviceId) return;
     setMeshBusy(true);
     try {
       if (meshForThis && mesh.status !== 'off' && mesh.status !== 'error') await stopMesh();
-      else await startMesh(id, { userId: user.id, name: user.name, role: user.role, deviceId });
+      else await startMesh(sessionId, { userId: user.id, name: user.name, role: user.role, deviceId });
     } finally {
       setMeshBusy(false);
     }
@@ -261,7 +273,7 @@ export default function MeshNetworkScreen() {
         </View>
 
         {/* Offline mesh */}
-        {id && (
+        {sessionId && (
           <View style={styles.sessionCard} testID="mesh-card">
             <View style={styles.sessionHeaderBar}>
               <View style={styles.sessionHeaderLeft}>
@@ -298,7 +310,26 @@ export default function MeshNetworkScreen() {
           </View>
         )}
 
-        <HotspotCard inspectionId={id || undefined} identity={user && deviceId ? { userId: user.id, name: user.name, role: user.role, deviceId } : null} mesh={mesh} />
+        {!id && pickable.length > 0 && (
+          <View style={styles.sessionCard}>
+            <View style={styles.sessionHeaderBar}>
+              <View style={styles.sessionHeaderLeft}>
+                <FieldMeshIcon name="description" size={20} color={FieldMeshColors.primary} />
+                <Text style={styles.sessionTitle}>Which inspection is this session for?</Text>
+              </View>
+            </View>
+            <View style={styles.pickRow}>
+              {pickable.map((r) => (
+                <Pressable key={r.id} onPress={() => setPickedId(r.id)} style={[styles.pickPill, pickedId === r.id && styles.pickPillOn]} testID={`pick-${r.id}`}>
+                  <Text style={[styles.pickText, pickedId === r.id && styles.pickTextOn]} numberOfLines={1}>
+                    {r.title}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
+        <HotspotCard inspectionId={sessionId} identity={user && deviceId ? { userId: user.id, name: user.name, role: user.role, deviceId } : null} mesh={mesh} />
 
         {/* Server card */}
         <View style={styles.sessionCard}>
@@ -465,4 +496,9 @@ const styles = StyleSheet.create({
   auditText: { fontSize: 12, fontWeight: '700', color: FieldMeshColors.onSurface, textAlign: 'center' },
   auditSub: { fontFamily: 'monospace', fontSize: 10, color: FieldMeshColors.onSurfaceVariant, textAlign: 'center' },
   btnPressed: { opacity: 0.85, transform: [{ scale: 0.985 }] },
+  pickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  pickPill: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: FieldMeshRadius.full, backgroundColor: FieldMeshColors.surfaceContainer, maxWidth: '100%' },
+  pickPillOn: { backgroundColor: FieldMeshColors.primaryFixed },
+  pickText: { fontSize: 12.5, fontWeight: '600', color: FieldMeshColors.onSurfaceVariant },
+  pickTextOn: { color: FieldMeshColors.onPrimaryFixed },
 });

@@ -20,6 +20,8 @@ export declare class FieldMeshHotspotNative extends NativeModule<HotspotEvents> 
   startHotspot(): Promise<{ ssid: string; passphrase: string; ip: string }>;
   stopHotspot(): Promise<void>;
   getHotspotIp(): string;
+  /** Active access-point interface (tethering or local-only hotspot), if any. */
+  getApInterface(): { name: string; ip: string } | null;
   joinWifi(ssid: string, passphrase: string, timeoutMs: number): Promise<{ bound: boolean }>;
   leaveWifi(): Promise<void>;
   startServer(port: number): Promise<{ port: number }>;

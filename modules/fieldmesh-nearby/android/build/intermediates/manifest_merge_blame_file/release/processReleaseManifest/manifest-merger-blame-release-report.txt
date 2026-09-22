@@ -1,0 +1,56 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="expo.modules.fieldmeshnearby" >
+4
+5    <uses-sdk android:minSdkVersion="24" />
+6    <!-- Nearby Connections picks its own radio (BLE, Bluetooth, Wi-Fi Direct / hotspot). -->
+7    <uses-permission
+7-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:3:5-95
+8        android:name="android.permission.BLUETOOTH"
+8-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:3:22-65
+9        android:maxSdkVersion="30" />
+9-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:3:66-92
+10    <uses-permission
+10-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:4:5-101
+11        android:name="android.permission.BLUETOOTH_ADMIN"
+11-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:4:22-71
+12        android:maxSdkVersion="30" />
+12-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:4:72-98
+13    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+13-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:5:5-78
+13-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:5:22-75
+14    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+14-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:6:5-76
+14-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:6:22-73
+15    <uses-permission
+15-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:7:5-120
+16        android:name="android.permission.BLUETOOTH_SCAN"
+16-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:7:22-70
+17        android:usesPermissionFlags="neverForLocation" />
+17-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:7:71-117
+18    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+18-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:8:5-76
+18-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:8:22-73
+19    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+19-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:9:5-76
+19-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:9:22-73
+20    <uses-permission
+20-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:10:5-125
+21        android:name="android.permission.NEARBY_WIFI_DEVICES"
+21-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:10:22-75
+22        android:usesPermissionFlags="neverForLocation" />
+22-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:10:76-122
+23    <uses-permission
+23-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:11:5-108
+24        android:name="android.permission.ACCESS_COARSE_LOCATION"
+24-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:11:22-78
+25        android:maxSdkVersion="32" />
+25-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:11:79-105
+26    <uses-permission
+26-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:12:5-106
+27        android:name="android.permission.ACCESS_FINE_LOCATION"
+27-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:12:22-76
+28        android:maxSdkVersion="32" />
+28-->/home/athidh/Athidh/Senguthar College Hackathon/frontend/modules/fieldmesh-nearby/android/src/main/AndroidManifest.xml:12:77-103
+29
+30</manifest>

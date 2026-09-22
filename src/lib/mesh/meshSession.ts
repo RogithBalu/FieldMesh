@@ -53,8 +53,14 @@ export interface MeshIdentity {
   deviceId: string;
 }
 
+export type HotspotMode = 'local-only' | 'existing';
+
 export interface HotspotState {
   role: HotspotRole;
+  /** local-only: Android created a private hotspot for us; existing: the hub runs over the phone's own hotspot. */
+  mode?: HotspotMode;
+  /** The nearby-devices permission was permanently denied; the app's settings page must fix it. */
+  permissionBlocked?: boolean;
   ssid?: string;
   passphrase?: string;
   host?: string;
@@ -337,7 +343,25 @@ function unsubscribeHotspot() {
   hotspotSubs = [];
 }
 
-export async function hostHotspot(inspectionId: string, id: MeshIdentity): Promise<void> {
+/** True when the phone is already running a hotspot (Android tethering) we can host the hub on. */
+export function existingHotspotIp(): string | null {
+  const ap = FieldMeshHotspot?.getApInterface?.();
+  return ap && ap.ip ? ap.ip : null;
+}
+
+/**
+ * Host a session. `mode` 'local-only' asks Android for a private hotspot (needs
+ * the nearby-devices/location permission and no tethering running); 'existing'
+ * runs the hub over the phone's own hotspot, which teammates join from Wi-Fi
+ * settings. 'auto' tries local-only and falls back to existing when Android
+ * refuses (tethering on) and an access-point interface is up.
+ */
+export async function hostHotspot(
+  inspectionId: string,
+  id: MeshIdentity,
+  mode: HotspotMode | 'auto' = 'auto',
+  credentials?: { ssid?: string; pass?: string }
+): Promise<void> {
   const native = FieldMeshHotspot;
   if (!native || !native.isSupported()) {
     setHotspot({ role: 'error', error: 'Hotspot sessions need the installed FieldMesh app on Android 8 or newer.' });
@@ -345,22 +369,49 @@ export async function hostHotspot(inspectionId: string, id: MeshIdentity): Promi
   }
   await leaveHotspot();
   await stopHotspotHost();
-  setHotspot({ role: 'starting', error: null, detail: 'Starting hotspot…' });
-
-  const perm = await requestHotspotPermissions();
-  if (!perm.granted) {
-    setHotspot({ role: 'error', error: `Permission needed: ${perm.missing.join(', ')}` });
-    return;
-  }
+  setHotspot({ role: 'starting', error: null, detail: 'Starting hotspot…', permissionBlocked: false });
 
   ensureDoc(inspectionId, id, 'hotspot');
   const key = generateSessionKey();
   hubKey = key;
   try {
-    const hs = await native.startHotspot();
+    let hs: { ssid: string; passphrase: string; ip: string };
+    let usedMode: HotspotMode;
+    const apIp = existingHotspotIp();
+    if (mode === 'existing') {
+      if (!apIp) throw new Error("No hotspot is running. Turn on the phone's hotspot in Settings (or choose the private hotspot option).");
+      hs = { ssid: credentials?.ssid ?? '', passphrase: credentials?.pass ?? '', ip: apIp };
+      usedMode = 'existing';
+    } else {
+      const perm = await requestHotspotPermissions();
+      if (!perm.granted) {
+        if (mode === 'auto' && apIp) {
+          hs = { ssid: credentials?.ssid ?? '', passphrase: credentials?.pass ?? '', ip: apIp };
+          usedMode = 'existing';
+        } else {
+          setHotspot({ role: 'error', error: `Permission needed: ${perm.missing.join(', ')}`, permissionBlocked: perm.blocked });
+          releaseDoc('hotspot');
+          return;
+        }
+      } else {
+        try {
+          hs = await native.startHotspot();
+          usedMode = 'local-only';
+        } catch (e) {
+          const apNow = existingHotspotIp();
+          if (mode === 'auto' && apNow) {
+            // Android refuses a second hotspot while tethering is on — use the one that is running.
+            hs = { ssid: credentials?.ssid ?? '', passphrase: credentials?.pass ?? '', ip: apNow };
+            usedMode = 'existing';
+          } else {
+            throw e;
+          }
+        }
+      }
+    }
     const { port } = await native.startServer(HUB_PORT);
     const doc = `inspection:${inspectionId}`;
-    const info: SessionInfo = { host: hs.ip, port, key, doc, ssid: hs.ssid, pass: hs.passphrase, name: id.name };
+    const info: SessionInfo = { host: hs.ip, port, key, doc, ssid: hs.ssid || undefined, pass: hs.passphrase || undefined, name: id.name };
 
     hotspotSubs.push(
       native.addListener('onClientConnected', (e) => {
@@ -406,19 +457,23 @@ export async function hostHotspot(inspectionId: string, id: MeshIdentity): Promi
     );
 
     await requestNotificationPermission();
-    native.startHubService(`${hs.ssid} · hosting ${id.name}'s site session`).catch(() => {});
+    native.startHubService(`${hs.ssid || 'Hotspot'} · hosting ${id.name}'s site session`).catch(() => {});
 
     setHotspot({
       role: 'hosting',
-      ssid: hs.ssid,
-      passphrase: hs.passphrase,
+      mode: usedMode,
+      ssid: hs.ssid || undefined,
+      passphrase: hs.passphrase || undefined,
       host: hs.ip,
       port,
       key,
       doc,
       sessionQr: buildSessionQr(info),
-      wifiQr: buildWifiQr(hs.ssid, hs.passphrase),
-      detail: undefined,
+      wifiQr: hs.ssid && hs.passphrase ? buildWifiQr(hs.ssid, hs.passphrase) : undefined,
+      detail:
+        usedMode === 'existing'
+          ? "Hub is running on this phone's own hotspot. Teammates: connect to it from Wi-Fi settings, then scan the QR."
+          : undefined,
       error: null,
     });
   } catch (e) {
@@ -435,15 +490,16 @@ export async function stopHotspotHost(): Promise<void> {
   hubKey = null;
   if (state.hotspot.role === 'hosting' || state.hotspot.role === 'starting' || state.hotspot.role === 'error') {
     unsubscribeHotspot();
+    const wasLocalOnly = state.hotspot.mode !== 'existing';
     try {
       await native?.stopServer();
       await native?.stopHubService();
-      await native?.stopHotspot();
+      if (wasLocalOnly) await native?.stopHotspot();
     } catch {
       /* ignore */
     }
     if (docUsers.has('hotspot')) releaseDoc('hotspot');
-    setHotspot({ role: 'off', ssid: undefined, passphrase: undefined, host: undefined, port: undefined, key: undefined, doc: undefined, sessionQr: undefined, wifiQr: undefined, detail: undefined });
+    setHotspot({ role: 'off', mode: undefined, ssid: undefined, passphrase: undefined, host: undefined, port: undefined, key: undefined, doc: undefined, sessionQr: undefined, wifiQr: undefined, detail: undefined });
   }
 }
 
