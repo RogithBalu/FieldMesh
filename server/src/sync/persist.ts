@@ -5,6 +5,8 @@ import type {
   onStoreDocumentPayload,
 } from "@hocuspocus/server";
 import { db } from "../db/index.js";
+import { extractNewEdits } from "../edits/extract.js";
+import { recomputeDisputes } from "../edits/disputes.js";
 
 /**
  * Loads the document snapshot from `yjs_documents` and applies any remaining
@@ -37,10 +39,10 @@ export async function onLoadDocument(data: onLoadDocumentPayload) {
 }
 
 /**
- * Appends the raw update to `yjs_updates`.
+ * Appends the raw update to `yjs_updates` and triggers edit extraction and dispute detection.
  */
 export async function onChange(data: onChangePayload) {
-  const { documentName, update } = data;
+  const { documentName, update, document } = data;
 
   if (update && update.length > 0) {
     db.prepare(
@@ -48,7 +50,11 @@ export async function onChange(data: onChangePayload) {
     ).run(documentName, Buffer.from(update), Date.now());
   }
 
-  // TODO: Plug in edit-log extraction and dispute detection here (edits/extract.ts, edits/disputes.ts)
+  // Extract newly arrived edits and recompute disputes for modified fields
+  const newPairs = extractNewEdits(documentName, document);
+  for (const { inspectionId, fieldId } of newPairs) {
+    recomputeDisputes(inspectionId, fieldId);
+  }
 }
 
 /**

@@ -5,13 +5,15 @@ import { db } from "../db/index.js";
 import { config } from "../config.js";
 
 export async function photoRoutes(app: FastifyInstance) {
-  app.head("/photos/:hash", async (req, reply) => {
+  const authenticate = (app as any).authenticate;
+
+  app.head("/photos/:hash", { onRequest: [authenticate] }, async (req, reply) => {
     const { hash } = req.params as { hash: string };
     const row = db.prepare("SELECT 1 FROM photos WHERE hash = ?").get(hash);
     reply.code(row ? 200 : 404).send();
   });
 
-  app.get("/photos/:hash", async (req, reply) => {
+  app.get("/photos/:hash", { onRequest: [authenticate] }, async (req, reply) => {
     const { hash } = req.params as { hash: string };
     const row = db
       .prepare("SELECT storage_key, size FROM photos WHERE hash = ?")

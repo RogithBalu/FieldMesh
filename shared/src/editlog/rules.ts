@@ -49,10 +49,14 @@ export function mergeConcurrent(
       };
     }
     case "notes":
+      // Whole-value snapshots can't be character-merged correctly here —
+      // that's Y.Text's job on the live document. If concurrent snapshot
+      // edits reach this function anyway, flag them rather than silently
+      // concatenating garbled duplicate text.
       return {
-        value: edits.map((e) => String(e.value)).join(""),
-        disputed: false,
-        reason: "Character-merged.",
+        value: latest.value,
+        disputed: edits.length > 1,
+        reason: "Concurrent notes edits should merge via Y.Text; flagged for review.",
       };
     case "photo":
       return {

@@ -2,6 +2,10 @@ import type { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { nanoid } from "nanoid";
 
+// Passwordless-by-design for the demo: any email logs in, auto-creating a
+// user on first sight. No password is ever checked against `password_hash`
+// (still stored as the literal string "placeholder"). This is a deliberate
+// scope cut for the MVP demo window, not an oversight — see docs/TODO.md.
 export async function authRoutes(app: FastifyInstance) {
   app.post("/auth/login", async (req, reply) => {
     const { email, name } = req.body as { email: string; name?: string };

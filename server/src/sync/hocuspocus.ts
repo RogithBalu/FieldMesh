@@ -3,9 +3,17 @@ import type { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { onLoadDocument, onChange, onStoreDocument } from "./persist.js";
 
+export type HocuspocusServer = ReturnType<typeof Server.configure>;
+
+let activeHocuspocus: HocuspocusServer | null = null;
+
+export function getHocuspocus(): HocuspocusServer | null {
+  return activeHocuspocus;
+}
+
 export function createHocuspocus(app: FastifyInstance) {
-  return Server.configure({
-    port: 1234,
+  activeHocuspocus = Server.configure({
+    port: Number(process.env.HOCUSPOCUS_PORT ?? 1234),
     async onAuthenticate({ token, documentName }) {
       if (!token) {
         throw new Error("unauthorized");
@@ -44,4 +52,5 @@ export function createHocuspocus(app: FastifyInstance) {
     onChange,
     onStoreDocument,
   });
+  return activeHocuspocus;
 }
