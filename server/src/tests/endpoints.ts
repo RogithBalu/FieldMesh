@@ -74,10 +74,16 @@ function jwtPayload(token: string): any {
   return JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
 }
 
-async function login(email: string, name?: string) {
-  const r = await call("POST", "/auth/login", { json: { email, name } });
-  if (r.status !== 200) throw new Error(`login ${email} failed: ${r.status} ${r.text}`);
+const PASSWORD = "correct horse battery";
+
+async function signup(email: string, name: string, role?: string) {
+  const r = await call("POST", "/auth/signup", { json: { email, name, password: PASSWORD, role } });
+  if (r.status !== 201) throw new Error(`signup ${email} failed: ${r.status} ${r.text}`);
   return r.body as { token: string; user: any };
+}
+
+async function login(email: string, password = PASSWORD) {
+  return call("POST", "/auth/login", { json: { email, password } });
 }
 
 function b64(s: string) {
@@ -132,43 +138,79 @@ async function main() {
     check("GET /health 200", r.status === 200 && r.body?.ok === true, r.body);
   }
 
-  section("auth");
+  section("auth: signup");
   const emailA = `a-${run}@test.dev`;
   const emailB = `b-${run}@test.dev`;
   const emailC = `c-${run}@test.dev`;
   {
-    const r = await call("POST", "/auth/login", { json: {} });
-    check("login without email -> 400", r.status === 400, r.status);
+    const r = await call("POST", "/auth/signup");
+    check("signup with no body -> 400 (not 500)", r.status === 400, r.status);
+    const r1 = await call("POST", "/auth/signup", { json: { name: "x", password: PASSWORD } });
+    check("signup without email -> 400", r1.status === 400, r1.status);
+    const r2 = await call("POST", "/auth/signup", { json: { email: "not-an-email", name: "x", password: PASSWORD } });
+    check("signup with invalid email -> 400", r2.status === 400, r2.status);
+    const r3 = await call("POST", "/auth/signup", { json: { email: emailA, password: PASSWORD } });
+    check("signup without name -> 400", r3.status === 400, r3.status);
+    const r4 = await call("POST", "/auth/signup", { json: { email: emailA, name: "x" } });
+    check("signup without password -> 400", r4.status === 400, r4.status);
+    const r5 = await call("POST", "/auth/signup", { json: { email: emailA, name: "x", password: "short" } });
+    check("signup with short password -> 400", r5.status === 400, r5.status);
+    const r6 = await call("POST", "/auth/signup", { json: { email: emailA, name: "x", password: PASSWORD, role: "admin" } });
+    check("signup with unknown role -> 400", r6.status === 400, r6.status);
+    const r7 = await call("POST", "/auth/signup", { json: "{not json" });
+    check("signup with malformed JSON -> 400", r7.status === 400, r7.status);
   }
+  const A = await signup(emailA, "Athidh");
+  const B = await signup(emailB, "Rogith", "supervisor");
+  const C = await signup(emailC, "Stranger");
+  check("signup returns token", typeof A.token === "string" && A.token.length > 20);
+  check("signup user shape {id,name,email,role}", A.user && A.user.id && A.user.name === "Athidh" && A.user.email === emailA && A.user.role === "technician", A.user);
+  check("signup response has no password_hash", !("password_hash" in (A.user ?? {})), Object.keys(A.user ?? {}));
+  check("signup honours a chosen role", B.user?.role === "supervisor", B.user);
+  check("signup token carries sub and role", jwtPayload(B.token).sub === B.user.id && jwtPayload(B.token).role === "supervisor", jwtPayload(B.token));
+  {
+    const r = await call("POST", "/auth/signup", { json: { email: emailA, name: "again", password: PASSWORD } });
+    check("duplicate signup -> 409", r.status === 409, r.status);
+    const r2 = await call("POST", "/auth/signup", { json: { email: emailA.toUpperCase(), name: "again", password: PASSWORD } });
+    check("duplicate signup with different email case -> 409", r2.status === 409, r2.status);
+  }
+
+  section("auth: login");
   {
     const r = await call("POST", "/auth/login");
     check("login with no body -> 400 (not 500)", r.status === 400, r.status);
+    const r1 = await call("POST", "/auth/login", { json: { password: PASSWORD } });
+    check("login without email -> 400", r1.status === 400, r1.status);
+    const r2 = await call("POST", "/auth/login", { json: { email: emailA } });
+    check("login without password -> 400", r2.status === 400, r2.status);
+    const r3 = await login(emailA, "wrong password");
+    check("login with wrong password -> 401", r3.status === 401, r3.status);
+    const r4 = await login(`nobody-${run}@test.dev`);
+    check("login with unknown email -> 401", r4.status === 401, r4.status);
+    check("unknown email and wrong password give the same error", r3.body?.error === r4.body?.error, [r3.body, r4.body]);
+    const r5 = await login(emailA);
+    check("login with correct password -> 200", r5.status === 200 && typeof r5.body?.token === "string", r5.status);
+    check("login user matches signup user", JSON.stringify(r5.body?.user) === JSON.stringify(A.user), [r5.body?.user, A.user]);
+    check("login response has no password_hash", !("password_hash" in (r5.body?.user ?? {})), Object.keys(r5.body?.user ?? {}));
+    const r6 = await login(emailA.toUpperCase());
+    check("login is case-insensitive on email", r6.status === 200, r6.status);
   }
-  {
-    const r = await call("POST", "/auth/login", { json: "{not json" });
-    check("login with malformed JSON -> 400", r.status === 400, r.status);
-  }
-  const A = await login(emailA, "Athidh");
-  const B = await login(emailB, "Rogith");
-  const C = await login(emailC, "Stranger");
-  check("login returns token", typeof A.token === "string" && A.token.length > 20);
-  check("login token carries sub and role", jwtPayload(A.token).sub === A.user.id && jwtPayload(A.token).role === "technician", jwtPayload(A.token));
-  check("new user shape {id,name,email,role}", A.user && A.user.id && A.user.name === "Athidh" && A.user.email === emailA && A.user.role === "technician", A.user);
-  check("new user response has no password_hash", !("password_hash" in (A.user ?? {})), Object.keys(A.user ?? {}));
-  const A2 = await login(emailA);
-  check("existing user login same id", A2.user?.id === A.user.id, A2.user);
-  check("existing user response has no password_hash", !("password_hash" in (A2.user ?? {})), Object.keys(A2.user ?? {}));
-  check("existing user shape matches new user shape", JSON.stringify(Object.keys(A2.user ?? {}).sort()) === JSON.stringify(Object.keys(A.user ?? {}).sort()), [Object.keys(A.user), Object.keys(A2.user ?? {})]);
+
+  section("auth: refresh and me");
   {
     const r = await call("POST", "/auth/refresh");
     check("refresh without token -> 401", r.status === 401, r.status);
     const r2 = await call("POST", "/auth/refresh", { token: "garbage" });
     check("refresh with bad token -> 401", r2.status === 401, r2.status);
-    const r3 = await call("POST", "/auth/refresh", { token: A.token });
+    const r3 = await call("POST", "/auth/refresh", { token: B.token });
     check("refresh -> 200 token", r3.status === 200 && typeof r3.body?.token === "string", r3.body);
     const p = r3.body?.token ? jwtPayload(r3.body.token) : {};
-    check("refreshed token keeps sub", p.sub === A.user.id, p);
-    check("refreshed token keeps role", p.role === "technician", p);
+    check("refreshed token keeps sub", p.sub === B.user.id, p);
+    check("refreshed token keeps role", p.role === "supervisor", p);
+    const me = await call("GET", "/auth/me", { token: A.token });
+    check("GET /auth/me -> own profile", me.status === 200 && me.body?.user?.id === A.user.id && me.body?.user?.email === emailA, me.body);
+    const meNo = await call("GET", "/auth/me");
+    check("GET /auth/me without token -> 401", meNo.status === 401, meNo.status);
   }
 
   section("teams");
