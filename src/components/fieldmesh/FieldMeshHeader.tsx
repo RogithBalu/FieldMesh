@@ -34,6 +34,9 @@ export const FieldMeshHeader: React.FC<FieldMeshHeaderProps> = ({
       onBackPress();
     } else if (router.canGoBack()) {
       router.back();
+    } else {
+      // Deep-linked straight into a detail screen: there is no stack to pop.
+      router.replace('/(fieldmesh)/inspections');
     }
   };
 

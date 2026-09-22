@@ -1,8 +1,16 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
-import { Stack } from 'expo-router';
+// Must be the first import: Yjs (client ids) and EditLog (edit ids) need
+// crypto.getRandomValues before any of them are loaded.
+import 'react-native-get-random-values';
+
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
-import { useColorScheme } from 'react-native';
+import { LogBox, useColorScheme } from 'react-native';
+import { AuthProvider } from '@/lib/auth-context';
+
+// isomorphic-webcrypto (pulled in by Yjs on React Native) logs about falling back
+// to non-secure randomness for its own operations; Yjs only uses it for client ids.
+LogBox.ignoreLogs(['asmCrypto seems to be load', 'isomorphic-webcrypto cannot ensure']);
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
@@ -12,16 +20,13 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-        }}
-      >
-        <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="explore" options={{ headerShown: false }} />
-        <Stack.Screen name="(fieldmesh)" options={{ headerShown: false }} />
-      </Stack>
-    </ThemeProvider>
+    <AuthProvider>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="index" />
+          <Stack.Screen name="(fieldmesh)" />
+        </Stack>
+      </ThemeProvider>
+    </AuthProvider>
   );
 }

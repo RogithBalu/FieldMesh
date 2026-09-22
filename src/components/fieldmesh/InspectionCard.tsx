@@ -28,7 +28,7 @@ export const InspectionCard: React.FC<InspectionCardProps> = ({
   tag,
   onPress,
 }) => {
-  const percentage = Math.round((completed / total) * 100);
+  const percentage = total > 0 ? Math.min(100, Math.round((completed / total) * 100)) : 0;
 
   const getThemeByStatus = () => {
     switch (statusType) {

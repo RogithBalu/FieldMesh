@@ -7,6 +7,8 @@ import {
   Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ONBOARDED_KEY } from '@/constants/storageKeys';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FieldMeshColors, FieldMeshSpacing, FieldMeshRadius } from '@/constants/fieldMeshTheme';
 import { FieldMeshIcon } from '@/components/fieldmesh/FieldMeshIcon';
@@ -51,7 +53,7 @@ export default function OnboardingScreen() {
           desc: 'Capture high-definition evidence tags regardless of signal blackout zones.',
         },
       ],
-      telemetry: 'STORAGE ENGINE: ACTIVE · ZERO CELL REQUIRED',
+      telemetry: 'STORAGE ENGINE: ON-DEVICE · SYNCS WHEN ONLINE',
       buttonLabel: 'Next: Team Sync',
     },
     {
@@ -60,22 +62,22 @@ export default function OnboardingScreen() {
       title: '02 — WORK AS A TEAM',
       subtitle: 'Synchronize effortlessly peer-to-peer.',
       description:
-        'Connect directly with nearby teammates using device-to-device local wireless mesh. Updates automatically relay through the nearest connected device.',
+        'Everyone on the team edits the same inspection document. Changes made offline merge automatically when a connection returns.',
       icon: 'sensors',
       badgeText: 'MULTI-HOP RELAY ACTIVE',
       features: [
         {
           icon: 'swap_horiz',
           title: 'Automatic device-to-device sync',
-          desc: 'No cloud server required on site; changes replicate instantaneously.',
+          desc: 'Edits are CRDT updates: no lost writes, no manual merges.',
         },
         {
           icon: 'badge',
           title: 'Mesh presence & team awareness',
-          desc: 'See which teammates are currently on site and what bays they are inspecting.',
+          desc: 'See which teammates have an inspection open right now.',
         },
       ],
-      telemetry: 'MESH PROTOCOL: v2.4 · 4 PEERS REACHABLE',
+      telemetry: 'LIVE SYNC: CRDT UPDATES OVER WEBSOCKET',
       buttonLabel: 'Next: Audit Trust',
     },
     {
@@ -84,9 +86,9 @@ export default function OnboardingScreen() {
       title: '03 — TRUST EVERY CHANGE',
       subtitle: 'Tamper-proof field verification trail.',
       description:
-        'Every inspection decision, timestamp, and photo is signed cryptographically with local keys. Safety conflicts default to FAIL until authorized review.',
+        'Every edit carries a hybrid logical clock and the ids of the entries it supersedes. Safety conflicts default to FAIL until an authorized review.',
       icon: 'shield',
-      badgeText: 'AES-256 SIGNED LOGS',
+      badgeText: 'HLC-ORDERED EDIT LOG',
       features: [
         {
           icon: 'rule',
@@ -96,7 +98,7 @@ export default function OnboardingScreen() {
         {
           icon: 'verified_user',
           title: 'Immutable tamper-proof logs',
-          desc: 'Export signed cryptographic verification bundles directly to compliance auditors.',
+          desc: 'Photos are content-addressed by SHA-256 and verified byte-for-byte on upload.',
         },
       ],
       telemetry: 'AUDIT LEDGER: ACTIVE · COMPLIANCE READY',
@@ -106,11 +108,16 @@ export default function OnboardingScreen() {
 
   const step = steps[currentStep];
 
+  const finish = () => {
+    AsyncStorage.setItem(ONBOARDED_KEY, '1').catch(() => {});
+    router.replace('/(fieldmesh)/inspections');
+  };
+
   const handleNext = () => {
     if (currentStep < steps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
-      router.replace('/inspections');
+      finish();
     }
   };
 
@@ -142,7 +149,7 @@ export default function OnboardingScreen() {
               ))}
             </View>
           </View>
-          <Pressable onPress={() => router.replace('/inspections')}>
+          <Pressable onPress={finish} hitSlop={8}>
             <Text style={styles.skipText}>Skip</Text>
           </Pressable>
         </View>
@@ -201,7 +208,7 @@ export default function OnboardingScreen() {
           </Pressable>
 
           <Text style={styles.footerNote}>
-            FieldMesh Core v4.12 • Certified Offline Architecture
+            FieldMesh • Offline-first inspection sync
           </Text>
         </View>
       </ScrollView>
