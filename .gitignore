@@ -27,3 +27,7 @@ data/
 # logs
 *.log
 npm-debug.log*
+
+# docs
+docs/
+
