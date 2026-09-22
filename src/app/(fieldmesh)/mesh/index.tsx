@@ -48,7 +48,7 @@ export default function MeshNetworkScreen() {
   const doc = useInspectionDoc(id || undefined, deviceId, author, {});
   const mesh = useMesh();
   const meshForThis = !!id && mesh.inspectionId === id;
-  const meshPeersHere = meshForThis ? mesh.peers : [];
+  const meshPeersHere = useMemo(() => (meshForThis ? mesh.peers : []), [meshForThis, mesh.peers]);
 
   const checkHealth = useCallback(async () => {
     let next: { health: 'ok' | 'down'; detail: string };
