@@ -45,7 +45,7 @@ async function main() {
   if (existsSync(tarPath)) unlinkSync(tarPath);
 
   execSync(
-    `tar --exclude="node_modules" --exclude="dist" --exclude=".git" --exclude="data" --exclude="docs" --exclude="deploy-bundle.tar.gz" -czf deploy-bundle.tar.gz .`,
+    `tar --exclude="node_modules" --exclude="dist" --exclude=".git" --exclude="data" --exclude="docs" --exclude="deploy-bundle.tar.gz" --exclude=".env" --exclude="*/.env" -czf deploy-bundle.tar.gz .`,
     { cwd: rootDir, stdio: "inherit" }
   );
 

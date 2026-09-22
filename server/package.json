@@ -9,7 +9,8 @@
     "migrate": "tsx src/db/migrate.ts",
     "test:resolve": "tsx src/tests/test-resolve-live.ts",
     "test:merge": "tsx src/tests/merge-correctness.ts",
-    "test:endpoints": "tsx src/tests/endpoints.ts"
+    "test:endpoints": "tsx src/tests/endpoints.ts",
+    "test:teammate": "tsx src/tests/simulate-teammate.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.600.0",

@@ -14,6 +14,8 @@ RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY shared/package.json ./shared/
 COPY server/package.json ./server/
+# pnpm.patchedDependencies (package.json) references patches/*.patch; install fails without them.
+COPY patches ./patches
 
 RUN pnpm install --frozen-lockfile
 
@@ -39,6 +41,7 @@ RUN corepack enable && corepack prepare pnpm@9.0.0 --activate
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY shared/package.json ./shared/
 COPY server/package.json ./server/
+COPY patches ./patches
 
 RUN pnpm install --prod --frozen-lockfile
 

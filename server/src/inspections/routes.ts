@@ -1,10 +1,91 @@
 import type { FastifyInstance } from "fastify";
 import { db } from "../db/index.js";
 import { nanoid } from "nanoid";
-import { tick, encodeHlc, decodeHlc, compare, type EditEntry } from "@fieldmesh/shared";
+import {
+  tick,
+  encodeHlc,
+  decodeHlc,
+  compare,
+  type EditEntry,
+  type FieldType,
+} from "@fieldmesh/shared";
 import { getHocuspocus } from "../sync/hocuspocus.js";
 import { denyIfNoAccess, inspectionAccess, isTeamMember } from "./access.js";
 import { isNonEmptyString, jsonBody } from "../utils/body.js";
+
+// Mirrors FieldType in shared/src/schema.ts; the dispute engine only knows
+// how to merge these.
+const FIELD_TYPES: readonly FieldType[] = [
+  "pass_fail",
+  "numeric",
+  "notes",
+  "photo",
+  "short_text",
+];
+
+interface FieldDefInput {
+  id: string;
+  type: FieldType;
+  tolerance?: number;
+}
+
+const selectFieldDefsStmt = db.prepare(
+  "SELECT field_id AS id, type, tolerance FROM field_defs WHERE inspection_id = ? ORDER BY rowid"
+);
+const insertFieldDefStmt = db.prepare(
+  "INSERT OR REPLACE INTO field_defs (inspection_id, field_id, type, tolerance) VALUES (?, ?, ?, ?)"
+);
+
+/**
+ * Validates the optional `fields` array on inspection creation. Returns the
+ * cleaned list, or an error message. Without field defs the dispute engine
+ * (edits/disputes.ts) falls back to "short_text" for every field, which means
+ * numeric tolerance and the photo "keep all" rule never apply.
+ */
+function parseFieldDefs(raw: unknown): { fields: FieldDefInput[] } | { error: string } {
+  if (raw === undefined || raw === null) return { fields: [] };
+  if (!Array.isArray(raw)) return { error: "fields must be an array" };
+  const fields: FieldDefInput[] = [];
+  const seen = new Set<string>();
+  for (const f of raw) {
+    if (!f || typeof f !== "object") return { error: "each field must be an object" };
+    const { id, type, tolerance } = f as Record<string, unknown>;
+    if (!isNonEmptyString(id)) return { error: "field id required" };
+    if (!FIELD_TYPES.includes(type as FieldType)) {
+      return { error: `field type must be one of ${FIELD_TYPES.join(", ")}` };
+    }
+    if (tolerance !== undefined && tolerance !== null && !Number.isFinite(Number(tolerance))) {
+      return { error: "field tolerance must be a number" };
+    }
+    if (seen.has(id)) return { error: `duplicate field id ${id}` };
+    seen.add(id);
+    fields.push({
+      id,
+      type: type as FieldType,
+      tolerance: tolerance === undefined || tolerance === null ? undefined : Number(tolerance),
+    });
+  }
+  return { fields };
+}
+
+const insertInspectionTx = db.transaction(
+  (
+    id: string,
+    teamId: string,
+    title: string,
+    site: string | null,
+    createdBy: string,
+    schemaVersion: number,
+    fields: FieldDefInput[]
+  ) => {
+    db.prepare(
+      "INSERT INTO inspections (id,team_id,title,site,created_by,created_at,schema_version) VALUES (?,?,?,?,?,?,?)"
+    ).run(id, teamId, title, site, createdBy, Date.now(), schemaVersion);
+    for (const f of fields) {
+      insertFieldDefStmt.run(id, f.id, f.type, f.tolerance ?? null);
+    }
+  }
+);
 
 export async function inspectionRoutes(app: FastifyInstance) {
   const authenticate = (app as any).authenticate;
@@ -18,7 +99,8 @@ export async function inspectionRoutes(app: FastifyInstance) {
         .prepare(
           `SELECT i.* FROM inspections i
            JOIN team_members tm ON tm.team_id = i.team_id
-           WHERE tm.user_id = ?`
+           WHERE tm.user_id = ?
+           ORDER BY i.created_at DESC`
         )
         .all(sub);
     }
@@ -28,11 +110,12 @@ export async function inspectionRoutes(app: FastifyInstance) {
     "/inspections",
     { onRequest: [authenticate] },
     async (req, reply) => {
-      const { teamId, title, site, schemaVersion } = jsonBody<{
+      const { teamId, title, site, schemaVersion, fields } = jsonBody<{
         teamId: string;
         title: string;
         site?: string;
         schemaVersion?: number;
+        fields?: FieldDefInput[];
       }>(req);
       const sub = (req.user as any).sub;
 
@@ -42,19 +125,32 @@ export async function inspectionRoutes(app: FastifyInstance) {
       if (!isNonEmptyString(title)) {
         return reply.code(400).send({ error: "title required" });
       }
+      const parsed = parseFieldDefs(fields);
+      if ("error" in parsed) {
+        return reply.code(400).send({ error: parsed.error });
+      }
 
       if (!isTeamMember(teamId, sub)) {
         return reply.code(403).send({ error: "not a member of this team" });
       }
 
       const id = nanoid();
-      db.prepare(
-        "INSERT INTO inspections (id,team_id,title,site,created_by,created_at,schema_version) VALUES (?,?,?,?,?,?,?)"
-      ).run(id, teamId, title, site ?? null, sub, Date.now(), schemaVersion ?? 1);
+      insertInspectionTx(
+        id,
+        teamId,
+        title.trim(),
+        isNonEmptyString(site) ? site.trim() : null,
+        sub,
+        schemaVersion ?? 1,
+        parsed.fields
+      );
       return { id };
     }
   );
 
+  // Returns the row plus its field definitions (empty array when the
+  // inspection was created without any) so the app can render the right
+  // checklist and apply the same tolerance rules the server does.
   app.get(
     "/inspections/:id",
     { onRequest: [authenticate] },
@@ -62,7 +158,11 @@ export async function inspectionRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string };
       const sub = (req.user as any).sub;
       if (denyIfNoAccess(inspectionAccess(id, sub), reply)) return;
-      return db.prepare("SELECT * FROM inspections WHERE id = ?").get(id);
+      const row = db.prepare("SELECT * FROM inspections WHERE id = ?").get(id) as
+        | Record<string, unknown>
+        | undefined;
+      if (!row) return reply.code(404).send({ error: "inspection not found" });
+      return { ...row, fields: selectFieldDefsStmt.all(id) };
     }
   );
 
@@ -137,7 +237,7 @@ export async function inspectionRoutes(app: FastifyInstance) {
         fieldId,
         value,
         author: sub,
-        device: device ?? "server",
+        device: isNonEmptyString(device) ? device : "server",
         hlc: encodeHlc(newHlc),
         parents: disputedHeads.map((h) => h.edit_id),
         schemaVersion: schemaVersion ?? 1,
@@ -152,6 +252,8 @@ export async function inspectionRoutes(app: FastifyInstance) {
       try {
         await directConn.transact((doc: any) => {
           doc.getMap("edits").set(editId, resolutionEdit);
+          // Keep the live "fields" map (what phones render) in step with the log.
+          doc.getMap("fields").set(fieldId, value);
         });
       } finally {
         await directConn.disconnect();

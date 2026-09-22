@@ -7,7 +7,7 @@
     "build:shared": "pnpm --filter @fieldmesh/shared build",
     "dev:shared": "pnpm --filter @fieldmesh/shared dev",
     "migrate": "pnpm --filter @fieldmesh/server migrate",
-    "deploy:lightsail": "node scripts/deploy-lightsail.mjs",
+    "deploy:lightsail": "node --env-file=.env scripts/deploy-lightsail.mjs",
     "test:app": "pnpm --filter FieldMeshApp test",
     "android": "pnpm --filter FieldMeshApp android"
   },
