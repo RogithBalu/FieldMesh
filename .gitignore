@@ -46,4 +46,6 @@ example
 credentials.json
 credentials/
 
-modules/*/android/build/
+# Gradle output inside the local Expo modules
+modules/**/build/
+modules/**/.gradle/
