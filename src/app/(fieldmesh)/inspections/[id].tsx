@@ -59,7 +59,8 @@ export default function InspectionDetailScreen() {
   const mesh = useMesh();
   const meshForThis = !!id && mesh.inspectionId === id;
   const meshPeers = meshForThis ? mesh.peers : [];
-  const meshOn = meshForThis && (mesh.status === 'searching' || mesh.status === 'linked' || mesh.status === 'starting');
+  const hotspotOn = meshForThis && (mesh.hotspot.role === 'hosting' || mesh.hotspot.role === 'joined' || mesh.hotspot.role === 'joining' || mesh.hotspot.role === 'starting');
+  const meshOn = meshForThis && (mesh.status === 'searching' || mesh.status === 'linked' || mesh.status === 'starting' || hotspotOn);
   const [meshStarting, setMeshStarting] = useState(false);
 
   const handleStartMesh = async () => {
@@ -186,7 +187,7 @@ export default function InspectionDetailScreen() {
   const completed = checklist.filter((f) => doc.fieldValue(f.fieldId) !== undefined).length;
   const disputedIds = new Set<string>([...serverDisputed, ...doc.disputedFields()].filter((f) => !f.startsWith('_')));
   const cloudPeerKeys = new Set(doc.peers.filter((p) => !p.self).map((p) => `${p.userId ?? p.clientId}|${p.device ?? ''}`));
-  const meshOnly = meshPeers.filter((p) => !cloudPeerKeys.has(`${p.userId ?? p.endpointId}|${p.device ?? ''}`));
+  const meshOnly = meshPeers.filter((p) => !cloudPeerKeys.has(`${p.userId ?? p.id}|${p.device ?? ''}`));
   const peersOnSite = cloudPeerKeys.size + meshOnly.length;
   const badge = syncBadge(doc.status, doc.synced, doc.unsyncedChanges, peersOnSite, meshPeers.length);
 
@@ -227,15 +228,22 @@ export default function InspectionDetailScreen() {
             <Pressable onPress={handleStartMesh} disabled={meshStarting} style={({ pressed }) => [styles.meshBannerBtn, pressed && styles.pressed]} testID="start-mesh">
               {meshStarting ? <ActivityIndicator size="small" color={FieldMeshColors.onPrimary} /> : <Text style={styles.meshBannerBtnText}>Start mesh</Text>}
             </Pressable>
+            <Pressable onPress={() => router.push({ pathname: '/(fieldmesh)/mesh', params: { id } })} hitSlop={6} testID="mesh-more">
+              <Text style={styles.meshBannerLink}>Hotspot / QR</Text>
+            </Pressable>
           </View>
         )}
         {meshOn && (
           <Pressable onPress={() => router.push({ pathname: '/(fieldmesh)/mesh', params: { id } })} style={styles.meshStrip} testID="mesh-strip">
             <FieldMeshIcon name="sensors" size={16} color={FieldMeshColors.onSecondaryContainer} />
             <Text style={styles.meshStripText} numberOfLines={2}>
-              {mesh.status === 'linked'
+              {meshPeers.length > 0
                 ? `Offline mesh · ${meshPeers.length} phone${meshPeers.length === 1 ? '' : 's'} linked (${[...new Set(meshPeers.map((p) => meshLabel(p.medium)))].join(', ')})${meshPeers.some((p) => p.relaysToCloud) ? ' · relayed to cloud' : ''}`
-                : 'Offline mesh · searching for nearby phones…'}
+                : hotspotOn
+                  ? mesh.hotspot.role === 'hosting'
+                    ? `Hosting hotspot ${mesh.hotspot.ssid ?? ''} · waiting for phones to scan the QR`
+                    : mesh.hotspot.detail ?? 'Joining hotspot session…'
+                  : 'Offline mesh · searching for nearby phones…'}
             </Text>
             <FieldMeshIcon name="chevron_right" size={18} color={FieldMeshColors.onSecondaryContainer} />
           </Pressable>
@@ -514,6 +522,7 @@ const styles = StyleSheet.create({
   meshBannerText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onPrimaryFixed },
   meshBannerBtn: { backgroundColor: FieldMeshColors.primary, paddingHorizontal: 12, height: 34, borderRadius: FieldMeshRadius.sm, alignItems: 'center', justifyContent: 'center', minWidth: 96 },
   meshBannerBtnText: { fontSize: 12, fontWeight: '700', color: FieldMeshColors.onPrimary },
+  meshBannerLink: { fontSize: 11, fontWeight: '700', color: FieldMeshColors.primary, textDecorationLine: 'underline' },
   meshStrip: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.secondaryContainer, padding: 10, borderRadius: FieldMeshRadius.md },
   meshStripText: { flex: 1, fontSize: 12, fontWeight: '600', color: FieldMeshColors.onSecondaryContainer },
   warnBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: FieldMeshColors.tertiaryFixed, padding: 10, borderRadius: FieldMeshRadius.md },

@@ -12,6 +12,7 @@ import { describeServer, getServerOverride, normalizeServerInput, onServerConfig
 import { useInspectionDoc } from '@/lib/useInspectionDoc';
 import { useMesh } from '@/lib/mesh/useMesh';
 import { isMeshAvailable, meshLabel, startMesh, stopMesh } from '@/lib/mesh/meshSession';
+import { HotspotCard } from '@/components/fieldmesh/HotspotCard';
 import { nameFor } from '@/lib/names';
 
 interface Member {
@@ -47,6 +48,7 @@ export default function MeshNetworkScreen() {
   const doc = useInspectionDoc(id || undefined, deviceId, author, {});
   const mesh = useMesh();
   const meshForThis = !!id && mesh.inspectionId === id;
+  const meshPeersHere = meshForThis ? mesh.peers : [];
 
   const checkHealth = useCallback(async () => {
     let next: { health: 'ok' | 'down'; detail: string };
@@ -136,7 +138,7 @@ export default function MeshNetworkScreen() {
         device: deviceId,
         self: true,
         via: cloudUp ? 'cloud' : 'mesh',
-        medium: cloudUp ? 'Internet (this device)' : meshForThis && mesh.peers.length ? 'Nearby (this device)' : 'Offline (this device)',
+        medium: cloudUp ? 'Internet (this device)' : meshPeersHere.length ? 'Mesh (this device)' : 'Offline (this device)',
       });
     }
     for (const p of doc.peers) {
@@ -144,9 +146,9 @@ export default function MeshNetworkScreen() {
       const key = `${p.userId ?? p.clientId}|${p.device ?? ''}`;
       byKey.set(key, { key, name: p.name ?? nameFor(p.userId), role: p.role, device: p.device, self: false, via: 'cloud', medium: 'Internet' });
     }
-    if (meshForThis) {
-      for (const p of mesh.peers) {
-        const key = `${p.userId ?? p.endpointId}|${p.device ?? ''}`;
+    {
+      for (const p of meshPeersHere) {
+        const key = `${p.userId ?? p.id}|${p.device ?? ''}`;
         const existing = byKey.get(key);
         const medium = meshLabel(p.medium);
         if (existing) byKey.set(key, { ...existing, via: 'both', medium: `${existing.medium} + ${medium}` });
@@ -154,7 +156,7 @@ export default function MeshNetworkScreen() {
       }
     }
     return [...byKey.values()];
-  }, [doc.peers, doc.status, mesh.peers, meshForThis, user, deviceId]);
+  }, [doc.peers, doc.status, meshPeersHere, user, deviceId]);
 
   const meshStatusLabel =
     !isMeshAvailable() || mesh.status === 'unavailable'
@@ -166,7 +168,7 @@ export default function MeshNetworkScreen() {
           : mesh.status === 'searching'
             ? 'Searching for phones…'
             : mesh.status === 'linked'
-              ? `${mesh.peers.length} phone${mesh.peers.length === 1 ? '' : 's'} linked`
+              ? `${mesh.peers.filter((p) => p.via === 'nearby').length} phone${mesh.peers.filter((p) => p.via === 'nearby').length === 1 ? '' : 's'} linked`
               : 'Error';
   const meshOn = meshForThis && (mesh.status === 'searching' || mesh.status === 'linked' || mesh.status === 'starting');
 
@@ -276,9 +278,9 @@ export default function MeshNetworkScreen() {
             </Text>
             {mesh.error && meshForThis && <Text style={styles.testResult}>{mesh.error}</Text>}
             {!isMeshAvailable() && <Text style={[styles.testResult, { color: FieldMeshColors.error }]}>Not available here: needs the installed FieldMesh app with Google Play services (not Expo Go).</Text>}
-            {meshForThis && mesh.discovered.filter((d) => !mesh.peers.some((p) => p.endpointId === d.endpointId)).length > 0 && (
+            {meshForThis && mesh.discovered.filter((d) => !mesh.peers.some((p) => p.id === `nearby:${d.endpointId}`)).length > 0 && (
               <Text style={styles.previewText}>
-                Found nearby: {mesh.discovered.filter((d) => !mesh.peers.some((p) => p.endpointId === d.endpointId)).map((d) => d.name.split('#')[0]).join(', ')} · connecting…
+                Found nearby: {mesh.discovered.filter((d) => !mesh.peers.some((p) => p.id === `nearby:${d.endpointId}`)).map((d) => d.name.split('#')[0]).join(', ')} · connecting…
               </Text>
             )}
             <Pressable
@@ -295,6 +297,8 @@ export default function MeshNetworkScreen() {
             )}
           </View>
         )}
+
+        <HotspotCard inspectionId={id || undefined} identity={user && deviceId ? { userId: user.id, name: user.name, role: user.role, deviceId } : null} mesh={mesh} />
 
         {/* Server card */}
         <View style={styles.sessionCard}>

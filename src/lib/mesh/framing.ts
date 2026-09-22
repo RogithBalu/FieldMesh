@@ -29,6 +29,11 @@ export class FrameReader {
     this.buf = this.buf.slice(offset);
     return frames;
   }
+
+  /** Bytes received but not yet part of a complete frame (replayed after a handshake). */
+  remaining(): Uint8Array {
+    return this.buf.slice();
+  }
 }
 
 export const Msg = {
