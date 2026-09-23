@@ -1,5 +1,5 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, RefreshControl } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, RefreshControl, Alert } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
@@ -7,19 +7,25 @@ import { FieldMeshColors, FieldMeshSpacing, FieldMeshRadius } from '@/constants/
 import { FieldMeshHeader } from '@/components/fieldmesh/FieldMeshHeader';
 import { FieldMeshIcon } from '@/components/fieldmesh/FieldMeshIcon';
 import { useAuth } from '@/lib/auth-context';
-import { api, errorMessage, type Team } from '@/lib/api';
+import { api, errorMessage, NetworkError, onConnectivity } from '@/lib/api';
+import { readCachedTeams, removeCachedTeam, upsertCachedTeam, writeCachedTeams, type CachedTeam } from '@/lib/teamsCache';
+import { enqueueCreate, flushPendingCreates, newLocalId, readPending } from '@/lib/pendingCreates';
 
 /**
- * Teams: GET /teams, POST /teams, POST /teams/:id/members.
+ * Teams: GET /teams, POST /teams, POST|DELETE /teams/:id/members.
  * The server adds members by user id (there is no user lookup by email), so
  * each operator's id is shown here with a copy button to hand to a team lead.
+ *
+ * The list works offline from a cache, and a team created without a server is
+ * held in the pending queue until one is reachable.
  */
 export default function TeamsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
 
-  const [teams, setTeams] = useState<Team[] | null>(null);
+  const [teams, setTeams] = useState<CachedTeam[] | null>(null);
+  const [leavingId, setLeavingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [newTeamName, setNewTeamName] = useState('');
@@ -31,20 +37,59 @@ export default function TeamsScreen() {
   const [addMemberMsg, setAddMemberMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  /**
+   * Server list when reachable, cache when not. Teams still in the pending
+   * queue are folded in either way: the server has not heard of them yet, but
+   * they exist on this phone and belong on the list.
+   */
   const load = useCallback(async () => {
+    const pendingTeams = (await readPending())
+      .filter((p): p is Extract<typeof p, { kind: 'team' }> => p.kind === 'team')
+      .map((p) => ({ id: p.id, name: p.name, pending: true }));
     try {
-      setTeams(await api.listTeams());
+      const fromServer = await api.listTeams();
+      const merged = [
+        ...pendingTeams.filter((p) => !fromServer.some((t) => t.id === p.id)),
+        ...fromServer,
+      ];
+      setTeams(merged);
+      writeCachedTeams(merged).catch(() => {});
       setLoadError(null);
     } catch (e) {
-      setLoadError(errorMessage(e));
-      setTeams((t) => t ?? []);
+      const cached = (await readCachedTeams()) ?? [];
+      const merged = [
+        ...pendingTeams.filter((p) => !cached.some((t) => t.id === p.id)),
+        ...cached,
+      ];
+      setTeams(merged);
+      setLoadError(
+        e instanceof NetworkError
+          ? 'Offline — showing the teams saved on this phone.'
+          : errorMessage(e)
+      );
     }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      load();
+      flushPendingCreates()
+        .catch(() => ({ sent: 0 }))
+        .then(() => load());
     }, [load])
+  );
+
+  // A reconnect is the moment the queue can drain, so push then re-read.
+  useEffect(
+    () =>
+      onConnectivity((online) => {
+        if (!online) return;
+        flushPendingCreates()
+          .then((r) => {
+            if (r.sent > 0) load();
+          })
+          .catch(() => {});
+      }),
+    [load]
   );
 
   const onRefresh = async () => {
@@ -53,20 +98,65 @@ export default function TeamsScreen() {
     setRefreshing(false);
   };
 
+  /**
+   * The phone names the team, so an offline create still produces a real team
+   * it can work with; the queued request carries that same id, which makes a
+   * replay a no-op rather than a duplicate.
+   */
   const handleCreate = async () => {
     const name = newTeamName.trim();
     if (!name) return;
     setCreating(true);
     setCreateError(null);
+    const id = newLocalId();
     try {
-      await api.createTeam(name);
+      await api.createTeam(name, id);
+      await upsertCachedTeam({ id, name });
       setNewTeamName('');
       await load();
     } catch (e) {
-      setCreateError(errorMessage(e));
+      if (e instanceof NetworkError) {
+        await enqueueCreate({ kind: 'team', id, name, queuedAt: Date.now() });
+        await upsertCachedTeam({ id, name, pending: true });
+        setNewTeamName('');
+        await load();
+        setCreateError(null);
+      } else {
+        setCreateError(errorMessage(e));
+      }
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleLeave = (team: CachedTeam) => {
+    if (!user) return;
+    Alert.alert(
+      `Leave ${team.name}?`,
+      'You will stop seeing this team’s inspections. Another member can add you back with your operator ID.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            setLeavingId(team.id);
+            try {
+              await api.removeTeamMember(team.id, user.id);
+              await removeCachedTeam(team.id);
+              setExpandedTeamId(null);
+              await load();
+            } catch (e) {
+              // The last member of a team that still holds inspections is
+              // refused, so the work does not end up unreachable.
+              Alert.alert('Could not leave', errorMessage(e));
+            } finally {
+              setLeavingId(null);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleAddMember = async (teamId: string) => {
@@ -172,13 +262,21 @@ export default function TeamsScreen() {
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.teamName}>{team.name}</Text>
-                    <Text style={styles.teamMeta}>#{team.id.slice(-6).toUpperCase()} · tap to add a member</Text>
+                    <Text style={styles.teamMeta}>
+                      #{team.id.slice(-6).toUpperCase()} ·{' '}
+                      {team.pending ? 'saved on this phone' : 'tap to add a member'}
+                    </Text>
                   </View>
                   <FieldMeshIcon name={expandedTeamId === team.id ? 'expand_less' : 'chevron_right'} size={22} color={FieldMeshColors.onSurfaceVariant} />
                 </Pressable>
 
                 {expandedTeamId === team.id && (
                   <View style={styles.expandedArea}>
+                    {team.pending && (
+                      <Text style={styles.pendingHint}>
+                        This team has not reached the server yet. Members can be added once it syncs.
+                      </Text>
+                    )}
                     <Text style={styles.addMemberLabel}>Add a member by operator ID</Text>
                     <Text style={styles.addMemberHint}>They must already have a FieldMesh account on this server.</Text>
                     <View style={styles.createRow}>
@@ -205,6 +303,20 @@ export default function TeamsScreen() {
                     {addMemberMsg && (
                       <Text style={addMemberMsg.ok ? styles.okText : styles.errorText}>{addMemberMsg.text}</Text>
                     )}
+
+                    <Pressable
+                      onPress={() => handleLeave(team)}
+                      disabled={leavingId === team.id}
+                      testID={`team-leave-${team.id}`}
+                      style={({ pressed }) => [styles.leaveBtn, pressed && styles.pressed, leavingId === team.id && styles.createBtnDisabled]}
+                    >
+                      {leavingId === team.id ? (
+                        <ActivityIndicator color={FieldMeshColors.error} size="small" />
+                      ) : (
+                        <FieldMeshIcon name="logout" size={18} color={FieldMeshColors.error} />
+                      )}
+                      <Text style={styles.leaveBtnText}>Leave this team</Text>
+                    </Pressable>
                   </View>
                 )}
               </View>
@@ -217,6 +329,24 @@ export default function TeamsScreen() {
 }
 
 const styles = StyleSheet.create({
+  pendingHint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: FieldMeshColors.onSurfaceVariant,
+    marginBottom: FieldMeshSpacing.sm,
+  },
+  leaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: FieldMeshSpacing.md,
+    paddingVertical: 12,
+    borderRadius: FieldMeshRadius.md,
+    borderWidth: 1,
+    borderColor: FieldMeshColors.error,
+  },
+  leaveBtnText: { color: FieldMeshColors.error, fontSize: 14, fontWeight: '600' },
   container: { flex: 1, backgroundColor: FieldMeshColors.surface },
   scroll: { flex: 1 },
   content: { padding: FieldMeshSpacing.gutter, gap: FieldMeshSpacing.md },

@@ -6,11 +6,21 @@ import { FieldMeshColors, FieldMeshSpacing, FieldMeshRadius } from '@/constants/
 import { FieldMeshHeader } from '@/components/fieldmesh/FieldMeshHeader';
 import { FieldMeshIcon } from '@/components/fieldmesh/FieldMeshIcon';
 import { CHECKLIST_TEMPLATE, templateFieldDefs } from '@/constants/checklistTemplate';
-import { api, errorMessage, type Team } from '@/lib/api';
+import { api, errorMessage, NetworkError, type Team } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { upsertCachedInspection } from '@/lib/inspectionsCache';
+import { readCachedTeams } from '@/lib/teamsCache';
+import { enqueueCreate, newLocalId, readPending } from '@/lib/pendingCreates';
 
-/** POST /inspections with the checklist's field definitions so the server's dispute rules match the UI. */
+/**
+ * POST /inspections with the checklist's field definitions so the server's
+ * dispute rules match the UI.
+ *
+ * Works with no server: the phone names the inspection, writes it to the local
+ * list and opens its checklist straight away, and the create waits in the
+ * pending queue. The team picker falls back to the cached teams for the same
+ * reason — including teams that are themselves still queued.
+ */
 export default function NewInspectionScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -24,16 +34,27 @@ export default function NewInspectionScreen() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    const pick = (list: Team[]) => {
+      if (cancelled) return;
+      setTeams(list);
+      if (list.length === 1) setTeamId(list[0].id);
+    };
     api
       .listTeams()
-      .then((t) => {
-        setTeams(t);
-        if (t.length === 1) setTeamId(t[0].id);
-      })
-      .catch((e) => {
-        setTeams([]);
-        setError(errorMessage(e));
+      .then(pick)
+      .catch(async (e) => {
+        const cached = (await readCachedTeams()) ?? [];
+        const queued = (await readPending())
+          .filter((p): p is Extract<typeof p, { kind: 'team' }> => p.kind === 'team')
+          .map((p) => ({ id: p.id, name: p.name }));
+        const merged = [...queued.filter((q) => !cached.some((c) => c.id === q.id)), ...cached];
+        pick(merged);
+        if (!cancelled && merged.length === 0) setError(errorMessage(e));
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleCreate = async () => {
@@ -47,20 +68,19 @@ export default function NewInspectionScreen() {
     }
     setBusy(true);
     setError(null);
-    try {
-      const { id } = await api.createInspection({
-        teamId,
-        title: title.trim(),
-        site: site.trim() || undefined,
-        schemaVersion: 1,
-        fields: templateFieldDefs(),
-      });
-      await upsertCachedInspection(
+
+    const id = newLocalId();
+    const trimmedTitle = title.trim();
+    const trimmedSite = site.trim() || null;
+    // Written before and after either outcome: the local record is what makes
+    // the checklist openable, online or not.
+    const cacheIt = () =>
+      upsertCachedInspection(
         {
           id,
           team_id: teamId,
-          title: title.trim(),
-          site: site.trim() || null,
+          title: trimmedTitle,
+          site: trimmedSite,
           created_by: user?.id ?? '',
           created_at: Date.now(),
           schema_version: 1,
@@ -68,9 +88,35 @@ export default function NewInspectionScreen() {
         },
         { total: CHECKLIST_TEMPLATE.length }
       );
+
+    try {
+      await api.createInspection({
+        id,
+        teamId,
+        title: trimmedTitle,
+        site: trimmedSite ?? undefined,
+        schemaVersion: 1,
+        fields: templateFieldDefs(),
+      });
+      await cacheIt();
       router.replace(`/(fieldmesh)/inspections/${id}`);
     } catch (e) {
-      setError(errorMessage(e));
+      if (e instanceof NetworkError) {
+        await enqueueCreate({
+          kind: 'inspection',
+          id,
+          teamId,
+          title: trimmedTitle,
+          site: trimmedSite ?? undefined,
+          schemaVersion: 1,
+          fields: templateFieldDefs(),
+          queuedAt: Date.now(),
+        });
+        await cacheIt();
+        router.replace(`/(fieldmesh)/inspections/${id}`);
+      } else {
+        setError(errorMessage(e));
+      }
     } finally {
       setBusy(false);
     }

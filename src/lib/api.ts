@@ -284,12 +284,25 @@ export const api = {
     const res = await request('GET', '/teams');
     return expectOk(res, 200);
   },
-  async createTeam(name: string): Promise<{ id: string }> {
-    const res = await request('POST', '/teams', { json: { name } });
+  /**
+   * `id` lets the caller name the team, which is how a team created offline
+   * keeps the same identity when its queued create finally reaches the server.
+   * Replaying a create with an id you already own is a no-op, not a duplicate.
+   */
+  async createTeam(name: string, id?: string): Promise<{ id: string; alreadyExisted?: boolean }> {
+    const res = await request('POST', '/teams', { json: id ? { name, id } : { name } });
     return expectOk(res, 200, 201);
   },
   async addTeamMember(teamId: string, userId: string): Promise<void> {
     const res = await request('POST', `/teams/${encodeURIComponent(teamId)}/members`, { json: { userId } });
+    expectOk(res, 204, 200);
+  },
+  /** Leave a team, or remove another member: membership here is flat. */
+  async removeTeamMember(teamId: string, userId: string): Promise<void> {
+    const res = await request(
+      'DELETE',
+      `/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`
+    );
     expectOk(res, 204, 200);
   },
 
@@ -304,7 +317,9 @@ export const api = {
     site?: string;
     schemaVersion?: number;
     fields?: { id: string; type: FieldType; tolerance?: number }[];
-  }): Promise<{ id: string }> {
+    /** Set when the inspection already exists on this phone (created offline). */
+    id?: string;
+  }): Promise<{ id: string; alreadyExisted?: boolean }> {
     const res = await request('POST', '/inspections', { json: input });
     return expectOk(res, 200, 201);
   },
