@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import * as Clipboard from 'expo-clipboard';
@@ -6,7 +6,21 @@ import { useRouter } from 'expo-router';
 import { FieldMeshColors, FieldMeshRadius, FieldMeshSpacing } from '@/constants/fieldMeshTheme';
 import { FieldMeshIcon } from './FieldMeshIcon';
 import { SessionQrScanner } from './SessionQrScanner';
-import { existingHotspotIp, hostHotspot, isHotspotAvailable, joinHotspot, leaveHotspot, retryJoin, stopHotspotHost, type MeshIdentity, type MeshState } from '@/lib/mesh/meshSession';
+import {
+  answerJoinRequest,
+  existingHotspotIp,
+  getAdmissionState,
+  hostHotspot,
+  isHotspotAvailable,
+  joinHotspot,
+  leaveHotspot,
+  requestJoinOverMesh,
+  retryJoin,
+  stopHotspotHost,
+  subscribeAdmission,
+  type MeshIdentity,
+  type MeshState,
+} from '@/lib/mesh/meshSession';
 import { inspectionIdFromDoc, type SessionInfo } from '@/lib/mesh/qr';
 
 /**
@@ -25,6 +39,23 @@ export function HotspotCard({ inspectionId, identity, mesh }: { inspectionId?: s
   const [passInput, setPassInput] = useState('');
   const available = isHotspotAvailable();
   const spokes = mesh.peers.filter((p) => p.via === 'hotspot');
+  const admission = useSyncExternalStore(subscribeAdmission, getAdmissionState, getAdmissionState);
+  const [askError, setAskError] = useState<string | null>(null);
+
+  // A denial is the one answer with nothing else to show for it, so surface it
+  // once and let it fade rather than leaving a dead banner on screen.
+  useEffect(() => {
+    if (admission.lastDecision && !admission.lastDecision.granted) {
+      const t = setTimeout(() => setAskError(null), 8000);
+      return () => clearTimeout(t);
+    }
+  }, [admission.lastDecision]);
+
+  const askToJoin = () => {
+    if (!inspectionId) return;
+    const res = requestJoinOverMesh(`inspection:${inspectionId}`);
+    setAskError(res.ok ? null : res.reason ?? 'Could not send the request.');
+  };
   const apIp = available && (hs.role === 'off' || hs.role === 'error') ? existingHotspotIp() : null;
 
   const run = async (fn: () => Promise<void>) => {
@@ -113,6 +144,31 @@ export function HotspotCard({ inspectionId, identity, mesh }: { inspectionId?: s
             <FieldMeshIcon name="qr_code_scanner" size={18} color={FieldMeshColors.primary} />
             <Text style={styles.btnAltText}>Scan a session QR to join</Text>
           </Pressable>
+          <Pressable
+            onPress={askToJoin}
+            disabled={!inspectionId || busy || !!admission.outstanding}
+            style={({ pressed }) => [styles.btnAlt, (!inspectionId || !!admission.outstanding) && styles.btnDisabled, pressed && styles.pressed]}
+            testID="hotspot-ask"
+          >
+            {admission.outstanding ? (
+              <ActivityIndicator color={FieldMeshColors.primary} size="small" />
+            ) : (
+              <FieldMeshIcon name="hub" size={18} color={FieldMeshColors.primary} />
+            )}
+            <Text style={styles.btnAltText}>
+              {admission.outstanding ? 'Waiting for the host to approve…' : 'Ask the host to let me in'}
+            </Text>
+          </Pressable>
+          <Text style={styles.detail}>
+            Too far to scan the QR? The request travels phone to phone until it reaches the host.
+          </Text>
+          {askError && <Text style={styles.askError}>{askError}</Text>}
+          {admission.lastDecision && !admission.lastDecision.granted && (
+            <Text style={styles.askError}>
+              {admission.lastDecision.by ?? 'The host'} declined this request
+              {admission.lastDecision.reason ? `: ${admission.lastDecision.reason}` : '.'}
+            </Text>
+          )}
           {!inspectionId && <Text style={styles.detail}>Open an inspection to host a session for it; joining works from anywhere.</Text>}
           {hs.role === 'error' && hs.joined && (
             <Pressable onPress={() => run(retryJoin)} style={({ pressed }) => [styles.btnAlt, pressed && styles.pressed]} testID="hotspot-retry">
@@ -120,6 +176,44 @@ export function HotspotCard({ inspectionId, identity, mesh }: { inspectionId?: s
               <Text style={styles.btnAltText}>Retry connecting to the hub</Text>
             </Pressable>
           )}
+        </View>
+      )}
+
+      {hs.role === 'hosting' && admission.pending.length > 0 && (
+        <View style={styles.requestBox} testID="join-requests">
+          <Text style={styles.requestTitle}>
+            {admission.pending.length} {admission.pending.length === 1 ? 'person wants' : 'people want'} to join
+          </Text>
+          {admission.pending.map((r) => (
+            <View key={r.rid} style={styles.requestRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.requestName} numberOfLines={1}>
+                  {r.name}
+                  {r.role ? ` · ${r.role}` : ''}
+                </Text>
+                <Text style={styles.requestMeta}>
+                  {r.hops === 0 ? 'directly linked' : `${r.hops} ${r.hops === 1 ? 'hop' : 'hops'} away`}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => answerJoinRequest(r.rid, false, 'Not approved')}
+                style={({ pressed }) => [styles.denyBtn, pressed && styles.pressed]}
+                testID={`join-deny-${r.rid}`}
+              >
+                <Text style={styles.denyBtnText}>Deny</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => answerJoinRequest(r.rid, true)}
+                style={({ pressed }) => [styles.approveBtn, pressed && styles.pressed]}
+                testID={`join-approve-${r.rid}`}
+              >
+                <Text style={styles.approveBtnText}>Approve</Text>
+              </Pressable>
+            </View>
+          ))}
+          <Text style={styles.requestHint}>
+            Approving sends this session&rsquo;s Wi-Fi details back along the same path.
+          </Text>
         </View>
       )}
 
@@ -194,6 +288,34 @@ function Cred({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
+  askError: { fontSize: 12, color: FieldMeshColors.error, marginTop: 4 },
+  requestBox: {
+    backgroundColor: FieldMeshColors.surfaceContainerLow,
+    borderRadius: FieldMeshRadius.md,
+    padding: FieldMeshSpacing.md,
+    marginTop: FieldMeshSpacing.md,
+    gap: FieldMeshSpacing.sm,
+  },
+  requestTitle: { fontSize: 14, fontWeight: '700', color: FieldMeshColors.onSurface },
+  requestRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  requestName: { fontSize: 14, fontWeight: '600', color: FieldMeshColors.onSurface },
+  requestMeta: { fontSize: 11, color: FieldMeshColors.onSurfaceVariant },
+  requestHint: { fontSize: 11, lineHeight: 15, color: FieldMeshColors.onSurfaceVariant },
+  approveBtn: {
+    backgroundColor: FieldMeshColors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: FieldMeshRadius.sm,
+  },
+  approveBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  denyBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: FieldMeshRadius.sm,
+    borderWidth: 1,
+    borderColor: FieldMeshColors.outlineVariant,
+  },
+  denyBtnText: { color: FieldMeshColors.onSurfaceVariant, fontSize: 13, fontWeight: '600' },
   card: { backgroundColor: FieldMeshColors.surfaceLowest, borderRadius: FieldMeshRadius.lg, padding: FieldMeshSpacing.md, borderWidth: 1, borderColor: FieldMeshColors.surfaceContainerHigh, gap: 12 },
   headerBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: FieldMeshColors.surfaceContainerLow, paddingHorizontal: 12, paddingVertical: 8, borderRadius: FieldMeshRadius.md, gap: 8 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },

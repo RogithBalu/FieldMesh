@@ -26,6 +26,18 @@ import { TcpTransport } from './tcpTransport';
 import { YjsSync } from './yjsSync';
 import { requestHotspotPermissions, requestMeshPermissions, requestNotificationPermission } from './permissions';
 import { buildSessionQr, buildWifiQr, generateSessionKey, inspectionIdFromDoc, type SessionInfo } from './qr';
+import {
+  beginRequest,
+  decide,
+  encodeDecision,
+  encodeRequest,
+  receiveDecision,
+  receiveRequest,
+  relayed,
+  relayedDecision,
+  resetAdmission,
+  type JoinDecision,
+} from './admission';
 
 export type MeshMedium = 'bluetooth-le' | 'bluetooth' | 'wifi' | 'wifi-hotspot' | 'unknown';
 export type MeshStatus = 'unavailable' | 'off' | 'starting' | 'searching' | 'linked' | 'error';
@@ -211,6 +223,10 @@ function attachLink(id: string, transport: Transport, seed: Pick<MeshPeer, 'via'
   const sync = new YjsSync(handle.doc, transport);
   const link: Link = { transport, sync, peer: { id, linkedAt: Date.now(), ...seed } };
   sync.onOther = (type, payload) => {
+    if (type === Msg.JOIN_REQUEST || type === Msg.JOIN_DECISION) {
+      handleAdmissionFrame(type, payload, id);
+      return;
+    }
     if (type !== Msg.HELLO) return;
     try {
       const h = JSON.parse(bytesToUtf8(payload)) as { u?: string; n?: string; r?: string; d?: string; c?: boolean };
@@ -229,6 +245,135 @@ function attachLink(id: string, transport: Transport, seed: Pick<MeshPeer, 'via'
   sendHello(sync);
   publishPeers();
 }
+
+// ── admission (join requests over the mesh) ──────────────────────────────────
+
+/** True while this phone hosts the session, i.e. it is the one that can answer. */
+function hostedDoc(): string | null {
+  return state.hotspot.role === 'hosting' ? state.hotspot.doc ?? null : null;
+}
+
+function sendToLink(linkId: string, type: number, json: string) {
+  links.get(linkId)?.sync.sendFrame(type, utf8ToBytes(json));
+}
+
+/** Flood to every link except the one a frame arrived on. */
+function floodLinks(type: number, json: string, exclude: string | null) {
+  for (const [linkId, link] of links) {
+    if (linkId === exclude) continue;
+    link.sync.sendFrame(type, utf8ToBytes(json));
+  }
+}
+
+function handleAdmissionFrame(type: number, payload: Uint8Array, fromLinkId: string) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(bytesToUtf8(payload));
+  } catch {
+    return;
+  }
+
+  if (type === Msg.JOIN_REQUEST) {
+    const action = receiveRequest(raw, fromLinkId, {
+      isHost: hostedDoc() !== null,
+      hostedDoc: hostedDoc(),
+      myUserId: identity?.userId ?? null,
+    });
+    if (action.kind === 'forward') {
+      const req = raw as Record<string, unknown>;
+      const next = relayed({
+        rid: String(req.rid),
+        userId: String(req.u),
+        name: String(req.n),
+        role: req.r ? String(req.r) : undefined,
+        deviceId: String(req.d),
+        doc: String(req.doc),
+        hops: Number(req.h ?? 0),
+        ttl: Number(req.t ?? 0),
+        seenAt: Date.now(),
+      });
+      floodLinks(Msg.JOIN_REQUEST, encodeRequest(next), action.exclude);
+    }
+    // 'queue' needs nothing here: admission state already holds it and the
+    // Mesh screen subscribes to that.
+    return;
+  }
+
+  const action = receiveDecision(raw, { myUserId: identity?.userId ?? null });
+  if (action.kind === 'resolved') {
+    void onOwnDecision(action.decision);
+    return;
+  }
+  if (action.kind === 'route' || action.kind === 'forward') {
+    const d = raw as Record<string, unknown>;
+    const next = relayedDecision({
+      rid: String(d.rid),
+      userId: String(d.u),
+      granted: !!d.ok,
+      by: d.by ? String(d.by) : undefined,
+      reason: d.why ? String(d.why) : undefined,
+      session: d.ok ? (d.s as SessionInfo | undefined) : undefined,
+      ttl: Number(d.t ?? 0),
+    });
+    const json = encodeDecision(next);
+    if (action.kind === 'route') sendToLink(action.to, Msg.JOIN_DECISION, json);
+    else floodLinks(Msg.JOIN_DECISION, json, null);
+  }
+}
+
+/** Our own request was answered: a grant joins the hotspot it names. */
+async function onOwnDecision(decision: JoinDecision) {
+  if (!decision.granted || !decision.session || !identity) return;
+  try {
+    await joinHotspot(decision.session, identity);
+  } catch (e) {
+    setHotspot({ role: 'error', error: `Approved, but joining failed: ${(e as Error).message}` });
+  }
+}
+
+/**
+ * Ask the host of this session for admission. The request goes to every linked
+ * peer; each passes it on once, so it reaches a host that is out of range of
+ * this phone but reachable through others.
+ */
+export function requestJoinOverMesh(doc: string): { ok: boolean; reason?: string } {
+  if (!identity) return { ok: false, reason: 'Start the mesh first.' };
+  if (links.size === 0) return { ok: false, reason: 'No one is linked yet — move closer to someone on this site.' };
+  const request = beginRequest({
+    userId: identity.userId,
+    name: identity.name,
+    role: identity.role,
+    deviceId: identity.deviceId,
+    doc,
+  });
+  floodLinks(Msg.JOIN_REQUEST, encodeRequest(request), null);
+  return { ok: true };
+}
+
+/** Host side: answer a queued request. A grant carries the session details. */
+export function answerJoinRequest(rid: string, granted: boolean, reason?: string): boolean {
+  const hs = state.hotspot;
+  if (hs.role !== 'hosting' || !hs.host || !hs.port || !hs.key || !hs.doc) return false;
+  const session: SessionInfo = {
+    host: hs.host,
+    port: hs.port,
+    key: hs.key,
+    doc: hs.doc,
+    ssid: hs.ssid,
+    pass: hs.passphrase,
+    name: identity?.name,
+  };
+  const out = decide(rid, granted, identity?.name ?? 'Host', session, reason);
+  if (!out) return false;
+  const json = encodeDecision(out.decision);
+  if (out.route) sendToLink(out.route, Msg.JOIN_DECISION, json);
+  else floodLinks(Msg.JOIN_DECISION, json, null);
+  return true;
+}
+
+export { getAdmissionState } from './admission';
+export { subscribeAdmission } from './admission';
+export type { JoinRequest, JoinDecision } from './admission';
 
 function detachLink(id: string) {
   const link = links.get(id);
@@ -421,6 +566,9 @@ export async function stopMesh(): Promise<void> {
     /* ignore */
   }
   if (docUsers.has('nearby')) releaseDoc('nearby');
+  // Return routes name links that are gone, and a queued request cannot be
+  // answered once this phone stops hosting anything reachable.
+  resetAdmission();
   setState({ status: FieldMeshNearby ? 'off' : 'unavailable', discovered: [], startedAt: null, peers: [...links.values()].map((l) => l.peer) });
 }
 

@@ -44,6 +44,13 @@ export const Msg = {
   PONG: 0x05,
   /** Identity of the peer (JSON): sent once right after a link opens. */
   HELLO: 0x10,
+  /**
+   * Admission to a hosted session, relayed hop by hop (JSON). A phone out of
+   * QR range of the host asks over the mesh instead; the host answers, and the
+   * grant carries the session credentials back along the same path.
+   */
+  JOIN_REQUEST: 0x20,
+  JOIN_DECISION: 0x21,
 } as const;
 
 export function encode(type: number, payload?: Uint8Array): Uint8Array {
