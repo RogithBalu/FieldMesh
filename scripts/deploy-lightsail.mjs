@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
-import { readFileSync, unlinkSync, existsSync } from "node:fs";
+import { readFileSync, unlinkSync, existsSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,6 +11,7 @@ import {
   AttachStaticIpCommand,
   GetInstanceCommand,
   GetStaticIpCommand,
+  GetInstanceAccessDetailsCommand,
 } from "@aws-sdk/client-lightsail";
 import {
   S3Client,
@@ -37,6 +39,60 @@ console.log(`Region:        ${REGION}`);
 console.log(`Instance Name: ${INSTANCE_NAME}`);
 console.log(`Plan:          ${BUNDLE_ID}`);
 console.log(`OS:            ${BLUEPRINT_ID}`);
+
+/**
+ * Redeploys onto a running instance. Lightsail hands out a short-lived key and
+ * an SSH certificate rather than a long-lived key pair, so both are written out
+ * and handed to ssh together; the files live in a temp directory that is
+ * removed whatever happens, because they are credentials.
+ */
+async function updateExistingInstance(lightsail, presignedUrl) {
+  console.log("Updating the running instance over SSH...");
+  const res = await lightsail.send(
+    new GetInstanceAccessDetailsCommand({ instanceName: INSTANCE_NAME, protocol: "ssh" })
+  );
+  const access = res.accessDetails;
+  if (!access?.privateKey) throw new Error("Lightsail returned no SSH key for this instance");
+
+  const dir = mkdtempSync(resolve(tmpdir(), "fieldmesh-ssh-"));
+  const keyPath = resolve(dir, "id");
+  try {
+    writeFileSync(keyPath, access.privateKey, { mode: 0o600 });
+    if (access.certKey) writeFileSync(`${keyPath}-cert.pub`, access.certKey, { mode: 0o644 });
+
+    // Windows ssh refuses a key the file system says others can read, and the
+    // mode above means nothing to NTFS; the ACL is what it actually checks.
+    if (process.platform === "win32") {
+      execSync(`icacls "${keyPath}" /inheritance:r`, { stdio: "ignore" });
+      execSync(`icacls "${keyPath}" /grant:r "%USERNAME%:(R)"`, { stdio: "ignore" });
+    }
+
+    // Git's MSYS ssh segfaults with a certificate on Windows; the system one works.
+    // Forward slashes: Windows accepts them, and they keep the backslash
+    // escapes of a Windows path out of a JavaScript string literal.
+    const winSsh = "C:/Windows/System32/OpenSSH/ssh.exe";
+    const sshBin = process.platform === "win32" && existsSync(winSsh) ? winSsh : "ssh";
+
+    const remote = [
+      "set -e",
+      "cd /opt/fieldmesh",
+      `sudo curl -fsSL '${presignedUrl}' -o /opt/fieldmesh/bundle.tar.gz`,
+      "sudo tar -xzf /opt/fieldmesh/bundle.tar.gz -C /opt/fieldmesh",
+      "sudo rm -f /opt/fieldmesh/bundle.tar.gz",
+      "sudo docker compose up -d --build",
+      "echo UPDATE_OK",
+    ].join(" && ");
+
+    execSync(
+      `"${sshBin}" -n -i "${keyPath}" -o CertificateFile="${keyPath}-cert.pub" ` +
+        `-o StrictHostKeyChecking=no -o ConnectTimeout=30 ` +
+        `${access.username}@${access.ipAddress} "${remote}"`,
+      { stdio: "inherit" }
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 async function main() {
   // 1. Package the project into a tarball
@@ -165,6 +221,11 @@ echo "=== FieldMesh Container Started Successfully at $(date) ==="
       console.log(`  - Instance state: ${state}...`);
       if (state === "running") break;
     }
+  } else {
+    // userData only runs when an instance is created, so an existing server
+    // would keep serving its old code while this script reported success.
+    // Push the new bundle onto it over SSH instead.
+    await updateExistingInstance(lightsail, presignedUrl);
   }
 
   // 5. Open Firewall Ports
