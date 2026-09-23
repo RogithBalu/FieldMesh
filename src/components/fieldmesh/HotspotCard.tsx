@@ -171,10 +171,16 @@ export function HotspotCard({ inspectionId, identity, mesh }: { inspectionId?: s
           )}
           {!inspectionId && <Text style={styles.detail}>Open an inspection to host a session for it; joining works from anywhere.</Text>}
           {hs.role === 'error' && hs.joined && (
-            <Pressable onPress={() => run(retryJoin)} style={({ pressed }) => [styles.btnAlt, pressed && styles.pressed]} testID="hotspot-retry">
-              <FieldMeshIcon name="refresh" size={18} color={FieldMeshColors.primary} />
-              <Text style={styles.btnAltText}>Retry connecting to the hub</Text>
-            </Pressable>
+            <>
+              <Pressable onPress={() => run(retryJoin)} disabled={busy} style={({ pressed }) => [styles.btnAlt, pressed && styles.pressed]} testID="hotspot-retry">
+                <FieldMeshIcon name="refresh" size={18} color={FieldMeshColors.primary} />
+                <Text style={styles.btnAltText}>Retry joining {hs.joined.ssid ? hs.joined.ssid : 'the hub'}</Text>
+              </Pressable>
+              <Pressable onPress={() => run(leaveHotspot)} disabled={busy} style={({ pressed }) => [styles.btn, styles.btnStop, pressed && styles.pressed]} testID="hotspot-cancel">
+                <FieldMeshIcon name="close" size={18} color={FieldMeshColors.onError} />
+                <Text style={styles.btnText}>Cancel and clear</Text>
+              </Pressable>
+            </>
           )}
         </View>
       )}

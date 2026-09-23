@@ -823,12 +823,17 @@ async function rejoinWifiThenConnect(): Promise<void> {
   await spokeConnect();
 }
 
-/** Retry after a failed join (e.g. the user joined the Wi-Fi manually). */
+/**
+ * Retry after a failed join. Re-joins the host's Wi-Fi first (that is what
+ * usually fails: the Android connect dialog was dismissed, or the hotspot was
+ * not up yet), then reconnects the hub socket.
+ */
 export async function retryJoin(): Promise<void> {
   if (!spokeInfo) return;
   spokeStopped = false;
   spokeAttempts = 0;
-  await spokeConnect();
+  setHotspot({ role: 'joining', error: null, detail: 'Retrying…' });
+  await rejoinWifiThenConnect();
 }
 
 export async function leaveHotspot(): Promise<void> {
