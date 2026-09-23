@@ -41,11 +41,15 @@ console.log(`OS:            ${BLUEPRINT_ID}`);
 async function main() {
   // 1. Package the project into a tarball
   console.log("\n[1/5] Packaging codebase bundle...");
-  const tarPath = resolve(rootDir, "deploy-bundle.tar.gz");
+  // Written to the parent, not into the directory being archived: creating the
+  // file inside `.` changes that directory while tar is reading it, and tar
+  // exits non-zero over "file changed as we read it" even though the file is
+  // excluded. A relative path keeps clear of Windows drive-letter quoting.
+  const tarPath = resolve(rootDir, "..", "fieldmesh-deploy-bundle.tar.gz");
   if (existsSync(tarPath)) unlinkSync(tarPath);
 
   execSync(
-    `tar --exclude="node_modules" --exclude="dist" --exclude=".git" --exclude="data" --exclude="docs" --exclude="deploy-bundle.tar.gz" --exclude=".env" --exclude="*/.env" -czf deploy-bundle.tar.gz .`,
+    `tar --exclude="node_modules" --exclude="dist" --exclude=".git" --exclude="data" --exclude="docs" --exclude=".env" --exclude="*/.env" -czf ../fieldmesh-deploy-bundle.tar.gz .`,
     { cwd: rootDir, stdio: "inherit" }
   );
 
