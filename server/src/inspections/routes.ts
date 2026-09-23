@@ -143,17 +143,21 @@ export async function inspectionRoutes(app: FastifyInstance) {
     "/inspections",
     { onRequest: [authenticate] },
     async (req, reply) => {
-      const { teamId, title, site, schemaVersion, fields } = jsonBody<{
+      const { teamId, title, site, schemaVersion, fields, id: clientId } = jsonBody<{
         teamId: string;
         title: string;
         site?: string;
         schemaVersion?: number;
         fields?: FieldDefInput[];
+        id?: string;
       }>(req);
       const sub = (req.user as any).sub;
 
       if (!isNonEmptyString(teamId)) {
         return reply.code(400).send({ error: "teamId required" });
+      }
+      if (clientId !== undefined && !isNonEmptyString(clientId)) {
+        return reply.code(400).send({ error: "id must be a non-empty string" });
       }
       if (!isNonEmptyString(title)) {
         return reply.code(400).send({ error: "title required" });
@@ -167,7 +171,19 @@ export async function inspectionRoutes(app: FastifyInstance) {
         return reply.code(403).send({ error: "not a member of this team" });
       }
 
-      const id = nanoid();
+      // A phone that created this offline supplies its own id, so replaying
+      // the queued create is a no-op rather than a second inspection.
+      const id = clientId ?? nanoid();
+      const existing = db
+        .prepare("SELECT team_id FROM inspections WHERE id = ?")
+        .get(id) as { team_id: string } | undefined;
+      if (existing) {
+        if (existing.team_id !== teamId) {
+          return reply.code(409).send({ error: "inspection id already in use" });
+        }
+        return { id, alreadyExisted: true };
+      }
+
       insertInspectionTx(
         id,
         teamId,
