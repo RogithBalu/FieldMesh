@@ -74,10 +74,10 @@ export default function NewInspectionScreen() {
     const trimmedSite = site.trim() || null;
     // Written before and after either outcome: the local record is what makes
     // the checklist openable, online or not.
-    const cacheIt = () =>
+    const cacheIt = (realId: string = id) =>
       upsertCachedInspection(
         {
-          id,
+          id: realId,
           team_id: teamId,
           title: trimmedTitle,
           site: trimmedSite,
@@ -90,7 +90,9 @@ export default function NewInspectionScreen() {
       );
 
     try {
-      await api.createInspection({
+      // An older server ignores our id and mints its own; follow its answer so
+      // the cached row and the Yjs document key match what the server holds.
+      const created = await api.createInspection({
         id,
         teamId,
         title: trimmedTitle,
@@ -98,8 +100,8 @@ export default function NewInspectionScreen() {
         schemaVersion: 1,
         fields: templateFieldDefs(),
       });
-      await cacheIt();
-      router.replace(`/(fieldmesh)/inspections/${id}`);
+      await cacheIt(created.id);
+      router.replace(`/(fieldmesh)/inspections/${created.id}`);
     } catch (e) {
       if (e instanceof NetworkError) {
         await enqueueCreate({

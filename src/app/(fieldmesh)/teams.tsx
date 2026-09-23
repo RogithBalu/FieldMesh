@@ -110,8 +110,10 @@ export default function TeamsScreen() {
     setCreateError(null);
     const id = newLocalId();
     try {
-      await api.createTeam(name, id);
-      await upsertCachedTeam({ id, name });
+      // A server that predates client-supplied ids mints its own and ignores
+      // ours, so the cache follows whatever came back, not what we sent.
+      const created = await api.createTeam(name, id);
+      await upsertCachedTeam({ id: created.id, name });
       setNewTeamName('');
       await load();
     } catch (e) {
